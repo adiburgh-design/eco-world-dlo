@@ -5,6 +5,7 @@ import {
   createFloatingLabelSprite,
   createMetalHazardTexture,
   createPlazaTileTexture,
+  createWaterFlowTexture,
 } from './textures';
 
 export interface AgentRig {
@@ -159,37 +160,198 @@ export function buildEcoAgentAvatar(
   return { group, leftLeg, rightLeg, leftArm, rightArm, jetCore };
 }
 
+export interface ZoneBeaconHandle {
+  group: THREE.Group;
+  crystal: THREE.Mesh;
+  starMesh: THREE.Mesh;
+  ring: THREE.Mesh;
+  outerRing: THREE.Mesh;
+  portalArchGroup: THREE.Group;
+  portalArchRing: THREE.Mesh;
+  portalVortex: THREE.Mesh;
+  lightBeam: THREE.Mesh;
+  shockwaveRing: THREE.Mesh;
+  sparkGroup: THREE.Group;
+  label: THREE.Sprite;
+  hitProxy: THREE.Mesh;
+}
+
 export function buildZoneBeacon(
   missionId: number,
   title: string,
   subtitle: string,
-  colorHex: string
-): { group: THREE.Group; crystal: THREE.Mesh; ring: THREE.Mesh; hitProxy: THREE.Mesh } {
+  colorHex: string,
+  entranceFacingOffset?: [number, number]
+): ZoneBeaconHandle {
   const group = new THREE.Group();
   const color = new THREE.Color(colorHex);
 
+  // Inner Glowing Teleport Ring
   const ring = new THREE.Mesh(
-    new THREE.RingGeometry(2.4, 2.85, 36),
+    new THREE.RingGeometry(2.35, 2.85, 36),
     new THREE.MeshStandardMaterial({
       color,
       emissive: color,
-      emissiveIntensity: 0.65,
+      emissiveIntensity: 0.85,
       side: THREE.DoubleSide,
-      roughness: 0.3,
+      roughness: 0.25,
     })
   );
   ring.rotation.x = -Math.PI / 2;
-  ring.position.y = 0.06;
+  ring.position.y = 0.08;
   group.add(ring);
 
+  // Outer Energy Halo Ring
+  const outerRing = new THREE.Mesh(
+    new THREE.RingGeometry(3.05, 3.28, 36),
+    new THREE.MeshStandardMaterial({
+      color: 0xfacc15,
+      emissive: 0xeab308,
+      emissiveIntensity: 0.6,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.85,
+    })
+  );
+  outerRing.rotation.x = -Math.PI / 2;
+  outerRing.position.y = 0.07;
+  group.add(outerRing);
+
+  // Expanding Ground Energy Shockwave Ring (pulses outward during portal activation)
+  const shockwaveRing = new THREE.Mesh(
+    new THREE.RingGeometry(1.4, 1.85, 40),
+    new THREE.MeshBasicMaterial({
+      color: 0x38bdf8,
+      transparent: true,
+      opacity: 0,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    })
+  );
+  shockwaveRing.rotation.x = -Math.PI / 2;
+  shockwaveRing.position.y = 0.14;
+  group.add(shockwaveRing);
+
+  // Vertical Glowing Portal Gateway (oriented toward the agent's approach direction)
+  const portalArchGroup = new THREE.Group();
+  if (entranceFacingOffset) {
+    const [dx, dz] = entranceFacingOffset;
+    portalArchGroup.rotation.y = Math.atan2(dx, dz);
+  }
+  portalArchGroup.position.set(0, 1.75, 0);
+
+  const portalArchRing = new THREE.Mesh(
+    new THREE.TorusGeometry(1.62, 0.11, 14, 44),
+    new THREE.MeshStandardMaterial({
+      color: 0x22d3ee,
+      emissive: 0x06b6d4,
+      emissiveIntensity: 0.8,
+      metalness: 0.65,
+      roughness: 0.2,
+    })
+  );
+  portalArchGroup.add(portalArchRing);
+
+  const goldArchTrim = new THREE.Mesh(
+    new THREE.TorusGeometry(1.82, 0.06, 10, 44),
+    new THREE.MeshStandardMaterial({
+      color: 0xfacc15,
+      emissive: 0xeab308,
+      emissiveIntensity: 0.55,
+      metalness: 0.85,
+      roughness: 0.18,
+    })
+  );
+  portalArchGroup.add(goldArchTrim);
+
+  const portalVortex = new THREE.Mesh(
+    new THREE.CircleGeometry(1.48, 32),
+    new THREE.MeshBasicMaterial({
+      color: 0x38bdf8,
+      transparent: true,
+      opacity: 0.18,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    })
+  );
+  portalArchGroup.add(portalVortex);
+  group.add(portalArchGroup);
+
+  // Upward Volumetric Portal Light Beam (ignites brightly on activation)
+  const lightBeam = new THREE.Mesh(
+    new THREE.CylinderGeometry(1.35, 2.05, 9.5, 24, 1, true),
+    new THREE.MeshBasicMaterial({
+      color: 0x67e8f9,
+      transparent: true,
+      opacity: 0,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    })
+  );
+  lightBeam.position.y = 4.75;
+  group.add(lightBeam);
+
+  // Swirling Orbiting Cyan & Gold Energy Sparks around Portal
+  const sparkGroup = new THREE.Group();
+  const sparkGeo = new THREE.OctahedronGeometry(0.14, 0);
+  const cyanSparkMat = new THREE.MeshBasicMaterial({
+    color: 0x38bdf8,
+    transparent: true,
+    opacity: 0.85,
+  });
+  const goldSparkMat = new THREE.MeshBasicMaterial({
+    color: 0xfacc15,
+    transparent: true,
+    opacity: 0.85,
+  });
+  for (let i = 0; i < 10; i++) {
+    const sp = new THREE.Mesh(sparkGeo, i % 2 === 0 ? cyanSparkMat : goldSparkMat);
+    const a = (i / 10) * Math.PI * 2;
+    sp.position.set(Math.cos(a) * 2.1, 0.5 + (i % 5) * 0.7, Math.sin(a) * 2.1);
+    sp.userData = { angle: a, baseY: sp.position.y, speed: 1.5 + (i % 3) * 0.45 };
+    sparkGroup.add(sp);
+  }
+  group.add(sparkGroup);
+
+  // Physical 3D Wooden & Gold Mission Signboard beside portal
+  const signGroup = new THREE.Group();
+  signGroup.position.set(2.9, 0, 1.8);
+  signGroup.rotation.y = -0.35;
+  const postMat = new THREE.MeshStandardMaterial({ color: 0x78350f, roughness: 0.88 });
+  const signPost = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.14, 2.0, 8), postMat);
+  signPost.position.y = 1.0;
+  signPost.castShadow = true;
+  const board = new THREE.Mesh(
+    new THREE.BoxGeometry(1.55, 0.85, 0.14),
+    new THREE.MeshStandardMaterial({ color: 0xb45309, roughness: 0.78 })
+  );
+  board.position.y = 1.78;
+  board.castShadow = true;
+  const boardFace = new THREE.Mesh(
+    new THREE.BoxGeometry(1.36, 0.66, 0.16),
+    new THREE.MeshStandardMaterial({ color: 0x0f294a, roughness: 0.35 })
+  );
+  boardFace.position.y = 1.78;
+  const signGem = new THREE.Mesh(
+    new THREE.OctahedronGeometry(0.2, 0),
+    new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.9 })
+  );
+  signGem.position.y = 2.42;
+  signGroup.add(signPost, board, boardFace, signGem);
+  group.add(signGroup);
+
+  // Floating 3D Game Crystal
   const crystal = new THREE.Mesh(
     new THREE.OctahedronGeometry(0.75, 0),
     new THREE.MeshPhysicalMaterial({
       color,
       emissive: color,
-      emissiveIntensity: 0.5,
-      roughness: 0.15,
-      metalness: 0.3,
+      emissiveIntensity: 0.65,
+      roughness: 0.12,
+      metalness: 0.25,
       clearcoat: 1,
     })
   );
@@ -197,21 +359,65 @@ export function buildZoneBeacon(
   crystal.castShadow = true;
   group.add(crystal);
 
+  // Golden Achievement Star Orbiting/Crowning the Crystal
+  const starShape = new THREE.Shape();
+  for (let i = 0; i < 10; i++) {
+    const r = i % 2 === 0 ? 0.38 : 0.17;
+    const a = (i / 10) * Math.PI * 2 - Math.PI / 2;
+    if (i === 0) starShape.moveTo(Math.cos(a) * r, Math.sin(a) * r);
+    else starShape.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+  }
+  starShape.closePath();
+  const starGeo = new THREE.ExtrudeGeometry(starShape, {
+    depth: 0.12,
+    bevelEnabled: true,
+    bevelThickness: 0.03,
+    bevelSize: 0.03,
+    bevelSegments: 2,
+  });
+  starGeo.center();
+  const starMesh = new THREE.Mesh(
+    starGeo,
+    new THREE.MeshStandardMaterial({
+      color: 0xfacc15,
+      emissive: 0xeab308,
+      emissiveIntensity: 0.65,
+      metalness: 0.75,
+      roughness: 0.2,
+    })
+  );
+  starMesh.position.y = 5.65;
+  group.add(starMesh);
+
   const label = createFloatingLabelSprite(`MISI ${missionId}: ${title}`, subtitle, colorHex);
-  label.position.set(0, 6.4, 0);
+  label.position.set(0, 6.75, 0);
   group.add(label);
 
   // Invisible simplified raycast hit box on layer 1
   const hitProxy = new THREE.Mesh(
-    new THREE.CylinderGeometry(3.1, 3.1, 7.5, 12),
+    new THREE.CylinderGeometry(3.2, 3.2, 7.8, 12),
     new THREE.MeshBasicMaterial({ visible: false })
   );
-  hitProxy.position.y = 3.75;
+  hitProxy.position.y = 3.9;
   hitProxy.layers.set(1);
   hitProxy.userData = { type: 'zone', missionId };
   group.add(hitProxy);
 
-  return { group, crystal, ring, hitProxy };
+  return {
+    group,
+    crystal,
+    starMesh,
+    ring,
+    outerRing,
+    portalArchGroup,
+    portalArchRing,
+    portalVortex,
+    lightBeam,
+    shockwaveRing,
+    sparkGroup,
+    label,
+    hitProxy,
+  };
 }
 
 export function buildZone1RiverFactory(
@@ -220,37 +426,100 @@ export function buildZone1RiverFactory(
   group: THREE.Group;
   riverMesh: THREE.Mesh;
   riverMat: THREE.MeshStandardMaterial;
+  riverTex: THREE.CanvasTexture;
   sludgeStream: THREE.Mesh;
+  rescueBoat: THREE.Group;
   clueMeshes: Record<'paip' | 'ikan' | 'bau', THREE.Group>;
 } {
   const group = new THREE.Group();
   const hazardTex = createMetalHazardTexture(maxAnisotropy);
+  const riverTex = createWaterFlowTexture(maxAnisotropy);
 
-  // Winding River Bed passing along Zone 1
+  // Winding Bright Turquoise River extending from Zone 1 out to front-left waterfall edge
   const riverCurve = new THREE.CatmullRomCurve3([
-    new THREE.Vector3(-23, 0.04, 4),
-    new THREE.Vector3(-17, 0.04, 9),
-    new THREE.Vector3(-12, 0.04, 14),
-    new THREE.Vector3(-6, 0.04, 21),
+    new THREE.Vector3(-23.5, 0.05, 3.2),
+    new THREE.Vector3(-17.5, 0.05, 8.8),
+    new THREE.Vector3(-12.0, 0.05, 14.5),
+    new THREE.Vector3(-8.2, 0.05, 21.5),
+    new THREE.Vector3(-5.8, 0.05, 28.4),
   ]);
-  const riverGeo = new THREE.TubeGeometry(riverCurve, 28, 2.7, 8, false);
+  const riverGeo = new THREE.TubeGeometry(riverCurve, 36, 2.85, 8, false);
   riverGeo.scale(1, 0.08, 1);
 
   const riverMat = new THREE.MeshStandardMaterial({
-    color: 0x1e293b,
-    roughness: 0.18,
-    metalness: 0.35,
-    emissive: 0x0f172a,
-    emissiveIntensity: 0.2,
+    map: riverTex,
+    color: 0x38bdf8,
+    roughness: 0.14,
+    metalness: 0.25,
+    emissive: 0x0284c7,
+    emissiveIntensity: 0.28,
   });
   const riverMesh = new THREE.Mesh(riverGeo, riverMat);
-  riverMesh.position.y = 0.08;
+  riverMesh.position.y = 0.09;
   riverMesh.receiveShadow = true;
   group.add(riverMesh);
 
-  // Textile Factory Building (multi-part composite)
+  // Cozy Red-Roofed River Ranger Station / Boathouse (from reference visual)
+  const boathouse = new THREE.Group();
+  boathouse.position.set(-14.2, 0, 5.2);
+  boathouse.rotation.y = 0.35;
+  const bhWalls = new THREE.Mesh(
+    new THREE.BoxGeometry(3.6, 2.1, 2.8),
+    new THREE.MeshStandardMaterial({ color: 0xfef3c7, roughness: 0.78 })
+  );
+  bhWalls.position.y = 1.05;
+  bhWalls.castShadow = true;
+  bhWalls.receiveShadow = true;
+  const bhRoof = new THREE.Mesh(
+    new THREE.ConeGeometry(2.8, 1.5, 4),
+    new THREE.MeshStandardMaterial({ color: 0xef4444, roughness: 0.55 })
+  );
+  bhRoof.position.y = 2.85;
+  bhRoof.rotation.y = Math.PI / 4;
+  bhRoof.castShadow = true;
+  const bhDoor = new THREE.Mesh(
+    new THREE.BoxGeometry(0.85, 1.35, 0.1),
+    new THREE.MeshStandardMaterial({ color: 0x92400e, roughness: 0.85 })
+  );
+  bhDoor.position.set(0, 0.68, 1.41);
+  const bhWin = new THREE.Mesh(
+    new THREE.BoxGeometry(0.65, 0.65, 0.12),
+    new THREE.MeshStandardMaterial({
+      color: 0xfef08a,
+      emissive: 0xfacc15,
+      emissiveIntensity: 0.7,
+    })
+  );
+  bhWin.position.set(1.05, 1.2, 1.41);
+  boathouse.add(bhWalls, bhRoof, bhDoor, bhWin);
+  group.add(boathouse);
+
+  // Cute Anchored Wooden Rescue Boat bobbing on the turquoise river
+  const rescueBoat = new THREE.Group();
+  rescueBoat.position.set(-13.8, 0.28, 12.2);
+  rescueBoat.rotation.y = -0.65;
+  const hull = new THREE.Mesh(
+    new THREE.CapsuleGeometry(0.45, 1.35, 6, 12),
+    new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.7 })
+  );
+  hull.rotation.z = Math.PI / 2;
+  hull.scale.set(0.65, 1, 0.85);
+  const cabinB = new THREE.Mesh(
+    new THREE.BoxGeometry(0.75, 0.45, 0.55),
+    new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.35 })
+  );
+  cabinB.position.set(0.1, 0.32, 0);
+  const buoy = new THREE.Mesh(
+    new THREE.TorusGeometry(0.16, 0.055, 8, 14),
+    new THREE.MeshStandardMaterial({ color: 0xf97316, roughness: 0.4 })
+  );
+  buoy.position.set(-0.35, 0.25, 0.38);
+  rescueBoat.add(hull, cabinB, buoy);
+  group.add(rescueBoat);
+
+  // Textile Factory Awareness Building (multi-part composite)
   const factory = new THREE.Group();
-  factory.position.set(-20.5, 0, 8);
+  factory.position.set(-20.8, 0, 7.6);
 
   const hall = new THREE.Mesh(
     new THREE.BoxGeometry(5.2, 3.2, 4.2),
@@ -358,7 +627,7 @@ export function buildZone1RiverFactory(
   };
   Object.values(clueMeshes).forEach((m) => group.add(m));
 
-  return { group, riverMesh, riverMat, sludgeStream, clueMeshes };
+  return { group, riverMesh, riverMat, riverTex, sludgeStream, rescueBoat, clueMeshes };
 }
 
 function createClue3DMarker(
@@ -439,26 +708,53 @@ export function buildZone2ToxicCity(maxAnisotropy: number): {
     base.add(stripe);
   });
 
-  // City School / Eco Tower
+  // Modern Eco-City Research Center & Green Conservatory Dome
   const tower = new THREE.Mesh(
-    new THREE.BoxGeometry(3.4, 5.0, 3.2),
-    new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.55, metalness: 0.25 })
+    new THREE.BoxGeometry(3.8, 4.8, 3.4),
+    new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.35, metalness: 0.25 })
   );
-  tower.position.set(3.2, 2.5, 0.8);
+  tower.position.set(3.2, 2.4, 0.8);
   tower.castShadow = true;
   base.add(tower);
 
   const glassBand = new THREE.Mesh(
-    new THREE.BoxGeometry(3.5, 0.65, 3.3),
+    new THREE.BoxGeometry(3.92, 0.85, 3.52),
     new THREE.MeshPhysicalMaterial({
       color: 0x38bdf8,
-      roughness: 0.1,
+      emissive: 0x0284c7,
+      emissiveIntensity: 0.45,
+      roughness: 0.08,
       metalness: 0.2,
       clearcoat: 1,
     })
   );
-  glassBand.position.set(3.2, 3.4, 0.8);
+  glassBand.position.set(3.2, 3.2, 0.8);
   base.add(glassBand);
+
+  // Rooftop Green Eco-Conservatory Dome + Solar Panel
+  const ecoRoofDome = new THREE.Mesh(
+    new THREE.SphereGeometry(1.35, 18, 12, 0, Math.PI * 2, 0, Math.PI / 2),
+    new THREE.MeshPhysicalMaterial({
+      color: 0x67e8f9,
+      roughness: 0.1,
+      transparent: true,
+      opacity: 0.65,
+      clearcoat: 1,
+    })
+  );
+  ecoRoofDome.position.set(3.2, 4.8, 0.8);
+  const innerGreenTree = new THREE.Mesh(
+    new THREE.SphereGeometry(0.75, 10, 10),
+    new THREE.MeshStandardMaterial({ color: 0x22c55e, roughness: 0.7 })
+  );
+  innerGreenTree.position.set(3.2, 5.2, 0.8);
+  const solarTilt = new THREE.Mesh(
+    new THREE.BoxGeometry(2.2, 0.12, 1.4),
+    new THREE.MeshPhysicalMaterial({ color: 0x0369a1, metalness: 0.7, roughness: 0.15, clearcoat: 1 })
+  );
+  solarTilt.position.set(-1.5, 3.85, -1.5);
+  solarTilt.rotation.x = 0.4;
+  base.add(ecoRoofDome, innerGreenTree, solarTilt);
 
   // Composite Vehicle on road
   const car = new THREE.Group();
@@ -521,21 +817,42 @@ export function buildZone3HopeForest(): {
   const base = new THREE.Group();
   base.position.set(13, 0, -12);
 
-  // Ranger Wooden Eco-Cabin
-  const cabinBody = new THREE.Mesh(
-    new THREE.BoxGeometry(3.8, 2.3, 3.0),
-    new THREE.MeshStandardMaterial({ color: 0x92400e, roughness: 0.85 })
+  // Elevated Wooden Forest Treehouse Sanctuary (inspired by upper-right lookout in reference!)
+  const stiltMat = new THREE.MeshStandardMaterial({ color: 0x78350f, roughness: 0.9 });
+  [
+    [-3.5, -0.6],
+    [-0.9, -0.6],
+    [-3.5, 1.6],
+    [-0.9, 1.6],
+  ].forEach(([sx, sz]) => {
+    const stilt = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.18, 2.2, 8), stiltMat);
+    stilt.position.set(sx, 1.1, sz);
+    stilt.castShadow = true;
+    base.add(stilt);
+  });
+
+  const deckFloor = new THREE.Mesh(
+    new THREE.BoxGeometry(3.8, 0.22, 3.2),
+    new THREE.MeshStandardMaterial({ color: 0xb45309, roughness: 0.82 })
   );
-  cabinBody.position.set(-2.2, 1.15, 0.5);
+  deckFloor.position.set(-2.2, 2.05, 0.5);
+  deckFloor.castShadow = true;
+  base.add(deckFloor);
+
+  const cabinBody = new THREE.Mesh(
+    new THREE.BoxGeometry(2.8, 1.85, 2.3),
+    new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.8 })
+  );
+  cabinBody.position.set(-2.2, 3.05, 0.5);
   cabinBody.castShadow = true;
   cabinBody.receiveShadow = true;
   base.add(cabinBody);
 
   const cabinRoof = new THREE.Mesh(
-    new THREE.ConeGeometry(3.0, 1.6, 4),
-    new THREE.MeshStandardMaterial({ color: 0x15803d, roughness: 0.6 })
+    new THREE.ConeGeometry(2.6, 1.45, 4),
+    new THREE.MeshStandardMaterial({ color: 0x16a34a, roughness: 0.65 })
   );
-  cabinRoof.position.set(-2.2, 3.05, 0.5);
+  cabinRoof.position.set(-2.2, 4.65, 0.5);
   cabinRoof.rotation.y = Math.PI / 4;
   cabinRoof.castShadow = true;
   base.add(cabinRoof);
@@ -608,14 +925,33 @@ export function buildZone4VoiceLab(): {
   const base = new THREE.Group();
   base.position.set(15, 0, 10);
 
-  // Acoustic Stage Plinth
+  // Stepped Futuristic Purple & Cyan Citadel Platform
   const stage = new THREE.Mesh(
-    new THREE.CylinderGeometry(4.2, 4.6, 0.7, 24),
-    new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.4, metalness: 0.5 })
+    new THREE.CylinderGeometry(4.4, 4.9, 0.55, 28),
+    new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.35, metalness: 0.55 })
   );
-  stage.position.y = 0.35;
+  stage.position.y = 0.28;
   stage.receiveShadow = true;
   base.add(stage);
+
+  const stageStep2 = new THREE.Mesh(
+    new THREE.CylinderGeometry(3.5, 3.8, 0.4, 28),
+    new THREE.MeshStandardMaterial({ color: 0x475569, roughness: 0.3, metalness: 0.6 })
+  );
+  stageStep2.position.y = 0.72;
+  base.add(stageStep2);
+
+  const stageGlowRing = new THREE.Mesh(
+    new THREE.TorusGeometry(3.65, 0.08, 10, 36),
+    new THREE.MeshStandardMaterial({
+      color: 0xc084fc,
+      emissive: 0xa855f7,
+      emissiveIntensity: 0.95,
+    })
+  );
+  stageGlowRing.rotation.x = Math.PI / 2;
+  stageGlowRing.position.y = 0.92;
+  base.add(stageGlowRing);
 
   // Translucent Acoustic Dome Shell
   const dome = new THREE.Mesh(
@@ -706,49 +1042,92 @@ export function buildZone5EcoMonument(maxAnisotropy: number): {
   const plazaTex = createPlazaTileTexture(maxAnisotropy);
   const earthTex = createEarthTexture(maxAnisotropy);
 
-  // Central Plaza Floor
+  // Tiered Central Eco-Headquarters Plaza + Glowing Cyan Pillars & Banners
   const plaza = new THREE.Mesh(
-    new THREE.CylinderGeometry(6.8, 7.2, 0.32, 36),
-    new THREE.MeshStandardMaterial({ map: plazaTex, roughness: 0.6, metalness: 0.1 })
+    new THREE.CylinderGeometry(7.0, 7.5, 0.35, 36),
+    new THREE.MeshStandardMaterial({ map: plazaTex, roughness: 0.55, metalness: 0.12 })
   );
-  plaza.position.y = 0.16;
+  plaza.position.y = 0.18;
   plaza.receiveShadow = true;
   group.add(plaza);
 
+  const innerDais = new THREE.Mesh(
+    new THREE.CylinderGeometry(4.4, 4.8, 0.35, 32),
+    new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.4, metalness: 0.2 })
+  );
+  innerDais.position.y = 0.52;
+  innerDais.receiveShadow = true;
+  group.add(innerDais);
+
+  const glowingEnergyBase = new THREE.Mesh(
+    new THREE.TorusGeometry(2.6, 0.12, 10, 36),
+    new THREE.MeshStandardMaterial({
+      color: 0x38bdf8,
+      emissive: 0x06b6d4,
+      emissiveIntensity: 0.95,
+    })
+  );
+  glowingEnergyBase.rotation.x = Math.PI / 2;
+  glowingEnergyBase.position.y = 0.72;
+  group.add(glowingEnergyBase);
+
+  // 4 Glowing Crystal Torch Pillars around Central Headquarters
+  const pillarMat = new THREE.MeshStandardMaterial({ color: 0xf1f5f9, roughness: 0.4, metalness: 0.2 });
+  const torchMat = new THREE.MeshStandardMaterial({
+    color: 0x67e8f9,
+    emissive: 0x0ea5e9,
+    emissiveIntensity: 0.95,
+  });
+  [
+    [-4.6, 4.6],
+    [4.6, 4.6],
+    [-4.6, -4.6],
+    [4.6, -4.6],
+  ].forEach(([px, pz]) => {
+    const col = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.32, 1.9, 10), pillarMat);
+    col.position.set(px, 1.1, pz);
+    col.castShadow = true;
+    const flame = new THREE.Mesh(new THREE.OctahedronGeometry(0.32, 0), torchMat);
+    flame.position.set(px, 2.35, pz);
+    group.add(col, flame);
+  });
+
   // Pedestal
   const plinth = new THREE.Mesh(
-    new THREE.CylinderGeometry(1.7, 2.2, 1.35, 16),
-    new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.35, metalness: 0.65 })
+    new THREE.CylinderGeometry(1.7, 2.2, 1.25, 16),
+    new THREE.MeshStandardMaterial({ color: 0x0f294a, roughness: 0.3, metalness: 0.6 })
   );
-  plinth.position.y = 0.98;
+  plinth.position.y = 1.15;
   plinth.castShadow = true;
   group.add(plinth);
 
-  // Rotating Earth Globe
+  // Monumental Rotating Glowing 3D Earth Globe
   const earthGlobe = new THREE.Mesh(
-    new THREE.SphereGeometry(1.85, 32, 32),
+    new THREE.SphereGeometry(1.95, 32, 32),
     new THREE.MeshStandardMaterial({
       map: earthTex,
-      roughness: 0.35,
-      metalness: 0.15,
+      roughness: 0.3,
+      metalness: 0.12,
+      emissive: 0x0284c7,
+      emissiveIntensity: 0.16,
     })
   );
-  earthGlobe.position.y = 3.9;
+  earthGlobe.position.y = 3.95;
   earthGlobe.castShadow = true;
   group.add(earthGlobe);
 
   // Tilted Golden Orbital Ring
   const goldRing = new THREE.Mesh(
-    new THREE.TorusGeometry(2.55, 0.11, 14, 48),
+    new THREE.TorusGeometry(2.68, 0.12, 14, 48),
     new THREE.MeshStandardMaterial({
       color: 0xfacc15,
       emissive: 0xeab308,
-      emissiveIntensity: 0.45,
-      metalness: 0.9,
+      emissiveIntensity: 0.55,
+      metalness: 0.88,
       roughness: 0.15,
     })
   );
-  goldRing.position.y = 3.9;
+  goldRing.position.y = 3.95;
   goldRing.rotation.x = Math.PI / 3;
   group.add(goldRing);
 

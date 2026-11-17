@@ -13,6 +13,57 @@ export function getDB(): DatabaseState {
     if (!parsed.missions || parsed.missions.length !== DEFAULT_MISSIONS.length || !parsed.missions[0]?.position) {
       parsed.missions = JSON.parse(JSON.stringify(DEFAULT_MISSIONS));
     }
+    // Ensure 6 Cemerlang class exists
+    if (!parsed.classes.some((c) => c.name === '6 Cemerlang')) {
+      parsed.classes.push({
+        id: 'c3',
+        name: '6 Cemerlang',
+        code: '6CEMERLANG',
+        teacherUsername: 'cikgu_amina',
+      });
+    }
+    const teacher = parsed.users.find((u) => u.id === 'tch1');
+    if (teacher && teacher.classes && !teacher.classes.includes('6 Cemerlang')) {
+      teacher.classes.push('6 Cemerlang');
+    }
+    // Upgrade legacy default M001/M002 names if unchanged, and seed any missing preloaded students BM6-001..BM6-005
+    let mutated = false;
+    const m1User = parsed.users.find((u) => u.id === 'M001');
+    if (m1User && m1User.fullName === 'Ali bin Hassan') {
+      m1User.fullName = 'Muhammad Danish Hakim bin Azman';
+      m1User.username = 'bm6-001';
+      mutated = true;
+    }
+    const m2User = parsed.users.find((u) => u.id === 'M002');
+    if (m2User && m2User.fullName === 'Siti Nurhaliza binti Kamal') {
+      m2User.fullName = 'Nur Aisyah Sofea binti Ahmad';
+      m2User.username = 'bm6-002';
+      mutated = true;
+    }
+    const defaultStudents = DEFAULT_DB.users.filter((u) => u.role === 'murid');
+    for (const defStu of defaultStudents) {
+      const exists = parsed.users.some(
+        (u) =>
+          u.role === 'murid' &&
+          (u.studentId || '').toUpperCase() === (defStu.studentId || '').toUpperCase()
+      );
+      if (!exists) {
+        parsed.users.push(JSON.parse(JSON.stringify(defStu)) as UserAccount);
+        mutated = true;
+      }
+    }
+    const m2Mission = parsed.missions?.find((m) => m.id === 2);
+    if (
+      m2Mission &&
+      (m2Mission.title === 'Bandar Udara Beracun' || m2Mission.shortTitle === 'Bandar Beracun')
+    ) {
+      m2Mission.title = 'Operasi Jejak Punca dan Kesan';
+      m2Mission.shortTitle = 'Operasi Jejak Punca dan Kesan';
+      mutated = true;
+    }
+    if (mutated) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
+    }
     return parsed;
   } catch {
     return JSON.parse(JSON.stringify(DEFAULT_DB)) as DatabaseState;
@@ -68,14 +119,14 @@ export function computeAIGuide(student: UserAccount): AIGuideResult {
   const p = student.progress;
   if (!p) {
     return {
-      levelMode: 'Standard',
+      levelMode: 'Biasa',
       nextStep: 'Mulakan penerokaan di EcoWorld 3D.',
       recommendations: [],
       needsIntervention: false,
     };
   }
   const recs: string[] = [];
-  let mode = 'Standard';
+  let mode = 'Biasa';
   let nextStep = 'Teruskan penerokaan zon misi di Pulau EcoWorld 3D.';
 
   if (!p.m1.completed) {
@@ -110,7 +161,7 @@ export function computeAIGuide(student: UserAccount): AIGuideResult {
     } else if (p.m4.completed && !p.m5.submitted) {
       nextStep = 'Seterusnya: Lancarkan Kempen Digital Selamatkan EcoWorld di Monumen Pusat (Zon 5).';
     } else if (p.m5.submitted) {
-      nextStep = 'Tahniah! Layari Hall of Heroes untuk mencetak sijil pengiktirafan anda.';
+      nextStep = 'Tahniah! Layari Dewan Wira untuk mencetak sijil pengiktirafan anda.';
     }
   }
 

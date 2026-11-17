@@ -1,6 +1,17 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  CheckCircle2,
+  ClipboardCheck,
+  Mic,
+  Pause,
+  Play,
+  RefreshCw,
+  Video,
+} from 'lucide-react';
 import { BADGES_DEF } from '../data/gameData';
-import { DatabaseState, UserAccount } from '../types/game';
+import { DatabaseState, StudentRecordingSubmission, UserAccount } from '../types/game';
+import { playSFX, setMusicState } from '../utils/sound';
+import { fetchSubmissions, saveSubmissionReview } from '../utils/submissionsApi';
 import { calcOverallScore, computeAIGuide, getMasteryLevel } from '../utils/storage';
 
 interface TeacherDashboardProps {
@@ -16,11 +27,100 @@ export function TeacherDashboard({
   onSaveFeedback,
   onApproveAI,
 }: TeacherDashboardProps) {
-  const [tab, setTab] = useState<'overview' | 'analytics'>('overview');
+  const [tab, setTab] = useState<'overview' | 'analytics' | 'submissions'>('overview');
   const [selectedClass, setSelectedClass] = useState<string>('ALL');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [fbDraft, setFbDraft] = useState('');
   const [minimized, setMinimized] = useState(false);
+
+  // Mission 5 Student Recordings & Teacher Review state
+  const [submissions, setSubmissions] = useState<StudentRecordingSubmission[]>([]);
+  const [loadingSubs, setLoadingSubs] = useState(false);
+  const [subsError, setSubsError] = useState<string | null>(null);
+  const [playingSubId, setPlayingSubId] = useState<string | null>(null);
+  const [reviewDrafts, setReviewDrafts] = useState<
+    Record<string, { comment: string; score: string; grade: string }>
+  >({});
+  const [savingReviewId, setSavingReviewId] = useState<string | null>(null);
+  const [savedReviewNotice, setSavedReviewNotice] = useState<string | null>(null);
+  const mediaRefs = useRef<Record<string, HTMLMediaElement | null>>({});
+
+  const loadSubmissions = useCallback(async () => {
+    setLoadingSubs(true);
+    setSubsError(null);
+    try {
+      const list = await fetchSubmissions(teacher);
+      setSubmissions(list);
+      setReviewDrafts((prev) => {
+        const next = { ...prev };
+        for (const item of list) {
+          if (!next[item.id]) {
+            next[item.id] = {
+              comment: item.teacherComment || '',
+              score: item.teacherScore !== null ? String(item.teacherScore) : '',
+              grade: item.teacherGrade || 'Cemerlang',
+            };
+          }
+        }
+        return next;
+      });
+    } catch (err) {
+      setSubsError(err instanceof Error ? err.message : 'Gagal memuatkan rakaman murid.');
+    } finally {
+      setLoadingSubs(false);
+    }
+  }, [teacher]);
+
+  useEffect(() => {
+    loadSubmissions();
+    return () => {
+      setMusicState({ ducked: false });
+    };
+  }, [loadSubmissions]);
+
+  const handleTogglePlaySubmission = (id: string) => {
+    const targetEl = mediaRefs.current[id];
+    if (!targetEl) return;
+
+    Object.entries(mediaRefs.current).forEach(([otherId, el]) => {
+      if (otherId !== id && el && !el.paused) {
+        el.pause();
+      }
+    });
+
+    if (targetEl.paused) {
+      targetEl.play().catch(() => {});
+      setPlayingSubId(id);
+      setMusicState({ ducked: true });
+    } else {
+      targetEl.pause();
+      setPlayingSubId(null);
+      setMusicState({ ducked: false });
+    }
+  };
+
+  const handleSaveSubmissionReview = async (subId: string) => {
+    const draft = reviewDrafts[subId] || { comment: '', score: '', grade: 'Cemerlang' };
+    setSavingReviewId(subId);
+    setSavedReviewNotice(null);
+    try {
+      const updated = await saveSubmissionReview({
+        teacher,
+        submissionId: subId,
+        teacherComment: draft.comment,
+        teacherScore: draft.score === '' ? null : Number(draft.score),
+        teacherGrade: draft.grade,
+      });
+      setSubmissions((prev) => prev.map((s) => (s.id === subId ? updated : s)));
+      playSFX('xp');
+      setSavedReviewNotice(`Penilaian untuk ${updated.studentName} telah disimpan.`);
+    } catch (err) {
+      playSFX('error');
+      setSubsError(err instanceof Error ? err.message : 'Gagal menyimpan penilaian.');
+    } finally {
+      setSavingReviewId(null);
+    }
+  };
 
   const allStudents = db.users.filter((u) => u.role === 'murid');
   const students =
@@ -52,9 +152,10 @@ export function TeacherDashboard({
         <button
           type="button"
           onClick={() => setMinimized(false)}
-          className="px-5 py-2.5 rounded-xl bg-slate-950/95 border border-sky-400 text-sky-300 font-display font-bold text-sm shadow-xl cursor-pointer"
+          className="btn-game-cyan px-5 py-2.5 rounded-2xl text-slate-950 font-display font-bold text-sm flex items-center gap-2 cursor-pointer"
         >
-          ▴ Buka Dashboard Guru
+          <span className="btn-icon-3d w-6 h-6 text-xs">📊</span>
+          <span>▴ Buka Papan Guru</span>
         </button>
       </div>
     );
@@ -66,7 +167,7 @@ export function TeacherDashboard({
         <div className="flex flex-wrap items-center justify-between gap-4 mb-5">
           <div>
             <h2 className="font-display text-2xl font-bold text-white">
-              Dashboard Guru · {teacher.fullName}
+              Papan Guru · {teacher.fullName}
             </h2>
             <p className="text-xs text-slate-400">
               Pilih kelas untuk memantau rekod jawapan murid dan status bimbingan secara masa nyata
@@ -76,31 +177,49 @@ export function TeacherDashboard({
             <button
               type="button"
               onClick={() => setTab('overview')}
-              className={`px-3.5 py-2 rounded-xl text-xs font-bold cursor-pointer ${
+              className={`btn-game-sm px-3.5 py-2 text-xs font-bold flex items-center gap-1.5 cursor-pointer ${
                 tab === 'overview'
-                  ? 'bg-emerald-500 text-slate-950'
-                  : 'bg-slate-900 border border-slate-700 text-slate-300'
+                  ? 'btn-game-emerald text-slate-950'
+                  : 'btn-game-slate text-slate-200'
               }`}
             >
-              Rekod Murid
+              <span className="btn-icon-3d w-5 h-5 text-[11px]">📋</span>
+              <span>Rekod Murid</span>
             </button>
             <button
               type="button"
               onClick={() => setTab('analytics')}
-              className={`px-3.5 py-2 rounded-xl text-xs font-bold cursor-pointer ${
+              className={`btn-game-sm px-3.5 py-2 text-xs font-bold flex items-center gap-1.5 cursor-pointer ${
                 tab === 'analytics'
-                  ? 'bg-emerald-500 text-slate-950'
-                  : 'bg-slate-900 border border-slate-700 text-slate-300'
+                  ? 'btn-game-emerald text-slate-950'
+                  : 'btn-game-slate text-slate-200'
               }`}
             >
-              Analitik & Intervensi
+              <span className="btn-icon-3d w-5 h-5 text-[11px]">📈</span>
+              <span>Analitik & Intervensi</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setTab('submissions');
+                loadSubmissions();
+              }}
+              className={`btn-game-sm px-3.5 py-2 text-xs font-bold flex items-center gap-1.5 cursor-pointer ${
+                tab === 'submissions'
+                  ? 'btn-game-cyan text-slate-950'
+                  : 'btn-game-slate text-slate-200'
+              }`}
+            >
+              <ClipboardCheck className="w-4 h-4 shrink-0" />
+              <span>Hasil Kerja Murid ({submissions.length})</span>
             </button>
             <button
               type="button"
               onClick={() => setMinimized(true)}
-              className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold text-sky-300 cursor-pointer"
+              className="btn-game-slate btn-game-sm px-3.5 py-2 text-xs font-bold text-sky-200 flex items-center gap-1.5 cursor-pointer"
             >
-              ▾ Tinjau Pulau 3D
+              <span className="btn-icon-3d w-5 h-5 text-[11px]">🏝️</span>
+              <span>▾ Tinjau Pulau 3D</span>
             </button>
           </div>
         </div>
@@ -112,10 +231,10 @@ export function TeacherDashboard({
             <button
               type="button"
               onClick={() => setSelectedClass('ALL')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer ${
+              className={`btn-game-sm px-3 py-1.5 text-xs font-bold cursor-pointer ${
                 selectedClass === 'ALL'
-                  ? 'bg-sky-500 text-slate-950'
-                  : 'bg-slate-950 border border-slate-700 text-slate-300 hover:border-sky-400'
+                  ? 'btn-game-cyan text-slate-950'
+                  : 'btn-game-slate text-slate-200'
               }`}
             >
               Semua Kelas ({allStudents.length})
@@ -127,10 +246,10 @@ export function TeacherDashboard({
                   key={cls.id}
                   type="button"
                   onClick={() => setSelectedClass(cls.name)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer ${
+                  className={`btn-game-sm px-3 py-1.5 text-xs font-bold cursor-pointer ${
                     selectedClass === cls.name
-                      ? 'bg-sky-500 text-slate-950'
-                      : 'bg-slate-950 border border-slate-700 text-slate-300 hover:border-sky-400'
+                      ? 'btn-game-cyan text-slate-950'
+                      : 'btn-game-slate text-slate-200'
                   }`}
                 >
                   {cls.name} ({count})
@@ -167,7 +286,280 @@ export function TeacherDashboard({
           </div>
         </div>
 
-        {tab === 'overview' ? (
+        {tab === 'submissions' ? (
+          /* =================================================================
+             DASHBOARD GURU – HASIL KERJA MURID (Professional Assessment View)
+             ================================================================= */
+          <section className="space-y-4">
+            <div className="p-5 rounded-2xl bg-slate-900/95 border border-indigo-400/40 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="font-display text-lg sm:text-xl font-bold text-white tracking-wide">
+                  DASHBOARD GURU – HASIL KERJA MURID
+                </h3>
+                <p className="text-xs text-slate-300 mt-0.5">
+                  Mainkan rakaman audio/video Misi 5 murid, tulis maklum balas dan rekodkan markah penilaian.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={loadSubmissions}
+                disabled={loadingSubs}
+                className="btn-game-slate btn-game-sm px-3.5 py-2 text-xs font-bold text-cyan-200 flex items-center gap-1.5 cursor-pointer disabled:opacity-60"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${loadingSubs ? 'animate-spin' : ''}`} />
+                <span>Muat Semula</span>
+              </button>
+            </div>
+
+            {savedReviewNotice && (
+              <div className="p-3 rounded-xl bg-emerald-950/90 border border-emerald-400 text-emerald-100 text-xs font-semibold flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>{savedReviewNotice}</span>
+              </div>
+            )}
+
+            {subsError && (
+              <div className="p-3 rounded-xl bg-rose-950/90 border border-rose-400 text-rose-100 text-xs font-semibold">
+                {subsError}
+              </div>
+            )}
+
+            {(() => {
+              const filteredSubs =
+                selectedClass === 'ALL'
+                  ? submissions
+                  : submissions.filter((s) => s.className === selectedClass);
+
+              if (loadingSubs && filteredSubs.length === 0) {
+                return (
+                  <div className="p-8 rounded-2xl bg-slate-900 border border-slate-800 text-center text-xs text-slate-400">
+                    Memuatkan hasil rakaman murid...
+                  </div>
+                );
+              }
+
+              if (filteredSubs.length === 0) {
+                return (
+                  <div className="p-8 rounded-2xl bg-slate-900 border border-slate-800 text-center space-y-1.5">
+                    <div className="font-display text-sm font-bold text-slate-200">
+                      Belum ada rakaman dihantar
+                    </div>
+                    <p className="text-xs text-slate-400">
+                      Rakaman audio atau video yang dihantar oleh murid dalam Misi 5 akan dipaparkan di sini secara automatik.
+                    </p>
+                  </div>
+                );
+              }
+
+              return (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  {filteredSubs.map((sub) => {
+                    const draft = reviewDrafts[sub.id] || {
+                      comment: sub.teacherComment || '',
+                      score: sub.teacherScore !== null ? String(sub.teacherScore) : '',
+                      grade: sub.teacherGrade || 'Cemerlang',
+                    };
+                    const isPlaying = playingSubId === sub.id;
+
+                    return (
+                      <article
+                        key={sub.id}
+                        className="p-5 rounded-2xl bg-slate-900 border border-slate-700/80 space-y-4 shadow-lg"
+                      >
+                        {/* Student & Task Header */}
+                        <div className="flex flex-wrap items-start justify-between gap-2 pb-3 border-b border-slate-800">
+                          <div>
+                            <h4 className="font-display text-base font-bold text-white">
+                              {sub.studentName}
+                            </h4>
+                            <div className="text-xs text-slate-400 mt-0.5 flex flex-wrap items-center gap-2">
+                              <span className="font-mono-num text-cyan-300 font-semibold">
+                                {sub.studentId || 'Tiada ID'}
+                              </span>
+                              <span>·</span>
+                              <span>{sub.className}</span>
+                              <span>·</span>
+                              <span>{new Date(sub.submittedAt).toLocaleString('ms-MY')}</span>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 text-xs font-bold">
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-indigo-950 border border-indigo-400/50 text-indigo-200">
+                              {sub.mediaType === 'video' ? (
+                                <Video className="w-3.5 h-3.5" />
+                              ) : (
+                                <Mic className="w-3.5 h-3.5" />
+                              )}
+                              <span>{sub.mediaType === 'video' ? 'Video' : 'Audio'}</span>
+                            </span>
+                            <span className="px-2.5 py-1 rounded-lg bg-emerald-950 border border-emerald-400/60 text-emerald-300">
+                              {sub.status}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="text-xs text-slate-300">
+                          <span className="text-slate-400">Tajuk Tugasan:</span>{' '}
+                          <strong className="text-white">{sub.campaignTitle}</strong>
+                        </div>
+
+                        {/* Playable Submitted Recording */}
+                        <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2.5">
+                          {sub.mediaUrl && sub.mediaType === 'video' ? (
+                            <video
+                              ref={(el) => {
+                                mediaRefs.current[sub.id] = el;
+                              }}
+                              controls
+                              src={sub.mediaUrl}
+                              onPlay={() => {
+                                setPlayingSubId(sub.id);
+                                setMusicState({ ducked: true });
+                              }}
+                              onPause={() => {
+                                if (playingSubId === sub.id) setPlayingSubId(null);
+                                setMusicState({ ducked: false });
+                              }}
+                              onEnded={() => {
+                                setPlayingSubId(null);
+                                setMusicState({ ducked: false });
+                              }}
+                              className="w-full rounded-lg bg-black aspect-video"
+                            />
+                          ) : (
+                            <audio
+                              ref={(el) => {
+                                mediaRefs.current[sub.id] = el;
+                              }}
+                              controls
+                              src={sub.mediaUrl}
+                              onPlay={() => {
+                                setPlayingSubId(sub.id);
+                                setMusicState({ ducked: true });
+                              }}
+                              onPause={() => {
+                                if (playingSubId === sub.id) setPlayingSubId(null);
+                                setMusicState({ ducked: false });
+                              }}
+                              onEnded={() => {
+                                setPlayingSubId(null);
+                                setMusicState({ ducked: false });
+                              }}
+                              className="w-full h-9"
+                            />
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={() => handleTogglePlaySubmission(sub.id)}
+                            className="btn-game-cyan btn-game-sm px-3.5 py-1.5 text-slate-950 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                          >
+                            {isPlaying ? (
+                              <>
+                                <Pause className="w-3.5 h-3.5" />
+                                <span>Jeda {sub.mediaType === 'video' ? 'Video' : 'Audio'}</span>
+                              </>
+                            ) : (
+                              <>
+                                <Play className="w-3.5 h-3.5 fill-current" />
+                                <span>
+                                  Mainkan {sub.mediaType === 'video' ? 'Video' : 'Audio'}
+                                </span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+
+                        {/* Teacher Feedback & Evaluation Form */}
+                        <div className="p-3.5 rounded-xl bg-slate-950/90 border border-slate-800 space-y-3">
+                          <div className="grid grid-cols-2 gap-2.5">
+                            <div>
+                              <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                                Markah Penilaian Guru (0–100)
+                              </label>
+                              <input
+                                type="number"
+                                min={0}
+                                max={100}
+                                value={draft.score}
+                                onChange={(e) =>
+                                  setReviewDrafts((prev) => ({
+                                    ...prev,
+                                    [sub.id]: { ...draft, score: e.target.value },
+                                  }))
+                                }
+                                placeholder="Contoh: 90"
+                                className="w-full px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-white text-xs font-mono-num"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                                Tahap Pencapaian
+                              </label>
+                              <select
+                                value={draft.grade}
+                                onChange={(e) =>
+                                  setReviewDrafts((prev) => ({
+                                    ...prev,
+                                    [sub.id]: { ...draft, grade: e.target.value },
+                                  }))
+                                }
+                                className="w-full px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-white text-xs"
+                              >
+                                <option value="Cemerlang">Cemerlang</option>
+                                <option value="Baik">Baik</option>
+                                <option value="Memuaskan">Memuaskan</option>
+                                <option value="Perlu Bimbingan">Perlu Bimbingan</option>
+                              </select>
+                            </div>
+                          </div>
+
+                          <div>
+                            <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                              Komen / Maklum Balas Guru
+                            </label>
+                            <textarea
+                              rows={2}
+                              value={draft.comment}
+                              onChange={(e) =>
+                                setReviewDrafts((prev) => ({
+                                  ...prev,
+                                  [sub.id]: { ...draft, comment: e.target.value },
+                                }))
+                              }
+                              placeholder="Tulis komen tentang kejelasan sebutan, intonasi dan kekuatan hujah murid..."
+                              className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-white text-xs"
+                            />
+                          </div>
+
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <span className="text-[11px] text-slate-400">
+                              {sub.reviewedAt
+                                ? `Disemak oleh ${sub.reviewedBy || 'Guru'} · ${new Date(
+                                    sub.reviewedAt
+                                  ).toLocaleString('ms-MY')}`
+                                : 'Menunggu semakan guru'}
+                            </span>
+                            <button
+                              type="button"
+                              disabled={savingReviewId === sub.id}
+                              onClick={() => handleSaveSubmissionReview(sub.id)}
+                              className="btn-game-emerald btn-game-sm px-4 py-1.5 text-slate-950 text-xs font-bold cursor-pointer disabled:opacity-50"
+                            >
+                              {savingReviewId === sub.id
+                                ? 'Menyimpan...'
+                                : 'Simpan Penilaian'}
+                            </button>
+                          </div>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+          </section>
+        ) : tab === 'overview' ? (
           <>
             <div className="overflow-x-auto rounded-2xl border border-slate-800 bg-slate-900/80">
               <table className="w-full text-left text-xs md:text-sm">
@@ -228,7 +620,7 @@ export function TeacherDashboard({
                                 setSelectedId(s.id);
                                 setFbDraft(s.teacherFeedback || '');
                               }}
-                              className="px-3 py-1.5 rounded-lg bg-sky-500 hover:bg-sky-400 text-slate-950 text-xs font-bold cursor-pointer"
+                              className="btn-game-cyan btn-game-sm px-3 py-1.5 text-slate-950 text-xs font-bold cursor-pointer"
                             >
                               Semak Rekod
                             </button>
@@ -257,7 +649,7 @@ export function TeacherDashboard({
                   <button
                     type="button"
                     onClick={() => setSelectedId(null)}
-                    className="px-3 py-1 rounded-lg bg-slate-800 text-xs text-slate-300 cursor-pointer"
+                    className="btn-game-slate btn-game-sm px-3 py-1 text-xs text-slate-200 cursor-pointer"
                   >
                     Tutup
                   </button>
@@ -297,7 +689,7 @@ export function TeacherDashboard({
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
                     <div className="text-xs font-bold text-purple-300">
-                      Cadangan AI ({computeAIGuide(selectedStudent).levelMode})
+                      Cadangan Pintar ({computeAIGuide(selectedStudent).levelMode})
                     </div>
                     <ul className="list-disc pl-4 text-xs text-slate-300 space-y-1">
                       {computeAIGuide(selectedStudent).recommendations.map((r, i) => (
@@ -311,7 +703,7 @@ export function TeacherDashboard({
                         onChange={(e) => onApproveAI(selectedStudent.id, e.target.checked)}
                         className="accent-emerald-500"
                       />
-                      Guru sahkan cadangan AI ini
+                      Guru sahkan cadangan pintar ini
                     </label>
                   </div>
 
@@ -326,7 +718,7 @@ export function TeacherDashboard({
                     <button
                       type="button"
                       onClick={() => onSaveFeedback(selectedStudent.id, fbDraft)}
-                      className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold cursor-pointer"
+                      className="btn-game-emerald btn-game-sm px-4 py-2 text-slate-950 text-xs font-bold cursor-pointer"
                     >
                       Simpan Maklum Balas
                     </button>
@@ -386,7 +778,7 @@ export function TeacherDashboard({
                           setSelectedId(s.id);
                           setFbDraft(s.teacherFeedback || '');
                         }}
-                        className="px-3 py-1 rounded-lg bg-sky-500 text-slate-950 font-bold cursor-pointer"
+                        className="btn-game-cyan btn-game-sm px-3 py-1 text-slate-950 text-xs font-bold cursor-pointer"
                       >
                         Semak
                       </button>

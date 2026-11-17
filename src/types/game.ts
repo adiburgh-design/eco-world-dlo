@@ -124,6 +124,11 @@ export interface AvatarDef {
   primaryColor: string;
   accentColor: string;
   tagline: string;
+  roleTitle?: string;
+  personality?: string;
+  greeting?: string;
+  suitLabel?: string;
+  symbolLabel?: string;
 }
 
 export interface AIGuideResult {
@@ -139,3 +144,28 @@ export interface Clue3D {
   description: string;
   position: [number, number, number];
 }
+
+export type SubmissionMediaType = 'audio' | 'video';
+
+export interface StudentRecordingSubmission {
+  id: string;
+  studentUserId: string;
+  studentName: string;
+  studentId: string;
+  className: string;
+  missionId: number;
+  mediaType: SubmissionMediaType;
+  mimeType: string;
+  fileName: string;
+  fileSize: number;
+  campaignTitle: string;
+  status: 'BERJAYA';
+  submittedAt: string;
+  teacherComment: string;
+  teacherScore: number | null;
+  teacherGrade: string;
+  reviewedAt: string | null;
+  reviewedBy: string | null;
+  mediaUrl?: string;
+}
+

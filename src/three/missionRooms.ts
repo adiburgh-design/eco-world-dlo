@@ -370,7 +370,7 @@ export function buildMissionRoom(
     // Floating Holographic Water Analysis Screens
     const holoLeft = buildHoloScreen(
       'ANALISIS AIR SUNGAI',
-      ['pH: 4.1 (BERASID)', 'DOKSIGEN: KRITIKAL', 'TOKSIN: KIMIA TEKSTIL'],
+      ['pH: 4.1 (BERASID)', 'OKSIGEN: KRITIKAL', 'TOKSIN: KIMIA TEKSTIL'],
       '#10b981',
       3.8,
       2.3,
@@ -523,7 +523,7 @@ export function buildMissionRoom(
     // Holographic Air Quality Monitoring Screens
     const aqiScreen = buildHoloScreen(
       'PEMANTAU UDARA (IPU)',
-      ['ZONA INDUSTRI: 185 (TIDAK SIHAT)', 'GAS SO2: HUJAN ASID', 'JEREBU: KENDERAAN & KILANG'],
+      ['ZON INDUSTRI: 185 (TIDAK SIHAT)', 'GAS SO2: HUJAN ASID', 'JEREBU: KENDERAAN & KILANG'],
       '#2dd4bf',
       4.1,
       2.4,
@@ -815,7 +815,7 @@ export function buildMissionRoom(
 
     const pitchScreen = buildHoloScreen(
       'PAPAN PEMBENTANGAN',
-      ['SEBUTAN: JELAS & BAKU', 'INTONASI: BERSEMANGAT', 'RAKAMAN MIC: SEDIA'],
+      ['SEBUTAN: JELAS & BAKU', 'INTONASI: BERSEMANGAT', 'RAKAMAN MIKROFON: SEDIA'],
       '#facc15',
       4.0,
       2.4,

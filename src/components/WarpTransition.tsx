@@ -72,13 +72,22 @@ export function WarpTransition({
       color: WARP_COLORS[Math.floor(Math.random() * WARP_COLORS.length)],
     }));
 
-    const startTime = performance.now();
+    const sparks = Array.from({ length: 42 }, (_, idx) => ({
+      angle: (idx / 42) * Math.PI * 2,
+      radiusScale: 0.16 + (idx % 6) * 0.085,
+      speed: 1.8 + (idx % 5) * 0.55,
+      size: 1.8 + (idx % 3) * 1.1,
+      color: idx % 2 === 0 ? '#38bdf8' : '#facc15',
+    }));
+
+    let startTime: number | null = null;
     let midFired = false;
     let rafId = 0;
 
     const renderFrame = (now: number) => {
-      const elapsed = now - startTime;
-      const t = Math.min(1, elapsed / durationMs);
+      if (startTime === null) startTime = now;
+      const elapsed = Math.max(0, now - startTime);
+      const t = Math.max(0, Math.min(1, elapsed / durationMs));
 
       if (!midFired && t >= 0.5) {
         midFired = true;
@@ -91,21 +100,54 @@ export function WarpTransition({
 
       const cx = width * 0.5;
       const cy = height * 0.5;
-      const maxRadius = Math.hypot(cx, cy) * 1.15;
+      const minDim = Math.min(width, height);
+      const maxRadius = Math.max(20, Math.hypot(cx, cy) * 1.15);
 
       // Warp speed envelope: builds quickly, peaks in middle, decelerates cleanly
-      const velocityBoost = Math.sin(t * Math.PI) * 34 + 6;
+      const velocityBoost = Math.max(6, Math.sin(t * Math.PI) * 34 + 6);
+
+      // Swirling dual-tone Cyan & Gold Portal Spiral Arcs
+      const spiralSpin = t * Math.PI * 5.2;
+      for (let ringIdx = 0; ringIdx < 2; ringIdx++) {
+        const ringRad = Math.max(24, minDim * (0.21 + ringIdx * 0.085) * (0.85 + Math.sin(t * Math.PI) * 0.35));
+        for (let arm = 0; arm < 3; arm++) {
+          const aStart = spiralSpin * (ringIdx === 0 ? 1 : -1.2) + (arm * Math.PI * 2) / 3;
+          ctx.beginPath();
+          ctx.arc(cx, cy, ringRad, aStart, aStart + 1.25);
+          ctx.strokeStyle = ringIdx === 0 ? '#22d3ee' : '#facc15';
+          ctx.lineWidth = ringIdx === 0 ? 3.5 : 2.6;
+          ctx.lineCap = 'round';
+          ctx.globalAlpha = Math.max(0.15, Math.sin(t * Math.PI) * 0.85);
+          ctx.stroke();
+        }
+      }
 
       // Radial portal rings expanding from center
       for (let r = 0; r < 3; r++) {
-        const ringPhase = (t * 2.4 + r * 0.33) % 1;
-        const radius = ringPhase * maxRadius * 0.85;
+        const ringPhase = Math.max(0, (t * 2.4 + r * 0.33) % 1);
+        const radius = Math.max(0, ringPhase * maxRadius * 0.85);
+        if (radius > 0.5) {
+          ctx.beginPath();
+          ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+          ctx.strokeStyle = r === 1 ? '#facc15' : accentColor;
+          ctx.globalAlpha = Math.max(0, (1 - ringPhase) * 0.35);
+          ctx.lineWidth = 2.5;
+          ctx.stroke();
+        }
+      }
+      ctx.globalAlpha = 1;
+
+      // Orbiting twinkling magical sparks around portal core
+      for (const sp of sparks) {
+        const curA = sp.angle + t * sp.speed * 4.5;
+        const dist = minDim * sp.radiusScale * (0.7 + t * 0.65);
+        const sx = cx + Math.cos(curA) * dist;
+        const sy = cy + Math.sin(curA) * dist;
         ctx.beginPath();
-        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-        ctx.strokeStyle = r === 1 ? '#facc15' : accentColor;
-        ctx.globalAlpha = (1 - ringPhase) * 0.35;
-        ctx.lineWidth = 2.5;
-        ctx.stroke();
+        ctx.arc(sx, sy, sp.size, 0, Math.PI * 2);
+        ctx.fillStyle = sp.color;
+        ctx.globalAlpha = Math.max(0.1, Math.sin(t * Math.PI) * 0.9);
+        ctx.fill();
       }
       ctx.globalAlpha = 1;
 
@@ -129,15 +171,15 @@ export function WarpTransition({
         ctx.strokeStyle = s.color;
         ctx.lineWidth = s.thickness;
         ctx.lineCap = 'round';
-        ctx.globalAlpha = Math.min(1, 0.4 + t * 0.6);
+        ctx.globalAlpha = Math.max(0, Math.min(1, 0.4 + t * 0.6));
         ctx.stroke();
       }
       ctx.globalAlpha = 1;
 
       // Peak flash burst right around teleport arrival (t = 0.45..0.75)
       if (t > 0.42 && t < 0.78) {
-        const flashAlpha = Math.sin(((t - 0.42) / 0.36) * Math.PI) * 0.48;
-        const grad = ctx.createRadialGradient(cx, cy, 10, cx, cy, maxRadius * 0.75);
+        const flashAlpha = Math.max(0, Math.sin(((t - 0.42) / 0.36) * Math.PI) * 0.48);
+        const grad = ctx.createRadialGradient(cx, cy, 10, cx, cy, Math.max(20, maxRadius * 0.75));
         grad.addColorStop(0, `rgba(255, 255, 255, ${flashAlpha})`);
         grad.addColorStop(0.35, `rgba(52, 211, 153, ${flashAlpha * 0.65})`);
         grad.addColorStop(1, 'rgba(2, 6, 23, 0)');
@@ -171,7 +213,7 @@ export function WarpTransition({
       {/* Center Portal HUD */}
       <div className="relative z-10 max-w-xl w-[90vw] mx-auto px-6 py-7 rounded-3xl bg-slate-950/88 border-2 border-emerald-400/80 shadow-2xl text-center space-y-3">
         <div className="font-game text-xs sm:text-sm font-black tracking-[0.26em] text-sky-300 uppercase">
-          ⚡ TELEPORTASI WARP ECOWORLD
+          ⚡ GERBANG TELEPORTASI ECOWORLD
         </div>
         <h2 className="game-title-gold text-2xl sm:text-4xl font-black tracking-wide uppercase leading-tight">
           {title}

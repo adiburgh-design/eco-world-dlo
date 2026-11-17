@@ -47,9 +47,10 @@ export function AdminDashboard({
         <button
           type="button"
           onClick={() => setMinimized(false)}
-          className="px-5 py-2.5 rounded-xl bg-slate-950/95 border border-purple-400 text-purple-300 font-display font-bold text-sm shadow-xl cursor-pointer"
+          className="btn-game-purple px-5 py-2.5 rounded-2xl text-white font-display font-bold text-sm flex items-center gap-2 cursor-pointer"
         >
-          ▴ Buka Pusat Kawalan Admin
+          <span className="btn-icon-3d w-6 h-6 text-xs">🛡️</span>
+          <span>▴ Buka Pusat Kawalan Pentadbir</span>
         </button>
       </div>
     );
@@ -61,7 +62,7 @@ export function AdminDashboard({
         <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
           <div>
             <h2 className="font-display text-2xl font-bold text-purple-300">
-              Pusat Kawalan Admin
+              Pusat Kawalan Pentadbir
             </h2>
             <p className="text-xs text-slate-400">
               Pengurusan Nama Guru & Kata Laluan, Kelas, Rekod Murid, dan Status Misi 3D
@@ -71,16 +72,18 @@ export function AdminDashboard({
             <button
               type="button"
               onClick={onResetDemo}
-              className="px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold cursor-pointer"
+              className="btn-game-rose btn-game-sm px-3.5 py-2 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer"
             >
-              Reset Data Demo
+              <span className="btn-icon-3d w-5 h-5 text-[11px]">🔄</span>
+              <span>Set Semula Data Contoh</span>
             </button>
             <button
               type="button"
               onClick={() => setMinimized(true)}
-              className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-sky-300 text-xs font-bold cursor-pointer"
+              className="btn-game-slate btn-game-sm px-3.5 py-2 text-sky-200 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
             >
-              ▾ Tinjau Pulau 3D
+              <span className="btn-icon-3d w-5 h-5 text-[11px]">🏝️</span>
+              <span>▾ Tinjau Pulau 3D</span>
             </button>
           </div>
         </div>
@@ -91,16 +94,16 @@ export function AdminDashboard({
             ['classes', `Kelas (${db.classes.length})`],
             ['students', `Murid (${students.length})`],
             ['overview', 'Rekod Aktiviti'],
-            ['missions', 'Misi & Sync'],
+            ['missions', 'Misi & Segerak'],
           ].map(([key, label]) => (
             <button
               key={key}
               type="button"
               onClick={() => setTab(key as typeof tab)}
-              className={`px-3.5 py-2 rounded-xl text-xs font-bold cursor-pointer ${
+              className={`btn-game-sm px-3.5 py-2 text-xs font-bold cursor-pointer ${
                 tab === key
-                  ? 'bg-emerald-500 text-slate-950'
-                  : 'bg-slate-900 border border-slate-700 text-slate-300'
+                  ? 'btn-game-emerald text-slate-950'
+                  : 'btn-game-slate text-slate-200'
               }`}
             >
               {label}
@@ -131,7 +134,7 @@ export function AdminDashboard({
                 />
               </div>
               <div>
-                <label className="block text-xs text-slate-400 mb-1">Nama Pengguna (Login)</label>
+                <label className="block text-xs text-slate-400 mb-1">Nama Pengguna (Log Masuk)</label>
                 <input
                   required
                   placeholder="Contoh: cikgu_hafiz"
@@ -152,7 +155,7 @@ export function AdminDashboard({
               </div>
               <button
                 type="submit"
-                className="w-full py-2.5 px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs cursor-pointer"
+                className="btn-game-emerald btn-game-sm w-full py-2.5 px-4 text-slate-950 font-bold text-xs cursor-pointer"
               >
                 + Tambah Guru
               </button>
@@ -189,7 +192,7 @@ export function AdminDashboard({
                                 }
                                 setEditingPwdId(null);
                               }}
-                              className="px-2 py-1 rounded bg-emerald-500 text-slate-950 font-bold cursor-pointer"
+                              className="btn-game-emerald btn-game-sm px-2.5 py-1 text-slate-950 font-bold cursor-pointer"
                             >
                               Simpan
                             </button>
@@ -205,14 +208,14 @@ export function AdminDashboard({
                             setEditingPwdId(t.id);
                             setPwdDraft(t.password);
                           }}
-                          className="px-2.5 py-1 rounded-lg bg-sky-500 text-slate-950 font-bold cursor-pointer"
+                          className="btn-game-cyan btn-game-sm px-2.5 py-1 text-slate-950 font-bold cursor-pointer"
                         >
                           Ubah Kata Laluan
                         </button>
                         <button
                           type="button"
                           onClick={() => onDeleteUser(t.id)}
-                          className="px-2.5 py-1 rounded-lg bg-rose-600 text-white font-bold cursor-pointer"
+                          className="btn-game-rose btn-game-sm px-2.5 py-1 text-white font-bold cursor-pointer"
                         >
                           Padam
                         </button>
@@ -305,7 +308,7 @@ export function AdminDashboard({
               />
               <button
                 type="submit"
-                className="px-4 py-2 rounded-xl bg-sky-500 text-slate-950 font-bold text-xs cursor-pointer"
+                className="btn-game-cyan btn-game-sm px-4 py-2 text-slate-950 font-bold text-xs cursor-pointer"
               >
                 + Tambah Kelas
               </button>
@@ -329,7 +332,7 @@ export function AdminDashboard({
                         <button
                           type="button"
                           onClick={() => onDeleteClass(c.id)}
-                          className="px-2.5 py-1 rounded-lg bg-rose-600 text-white font-bold cursor-pointer"
+                          className="btn-game-rose btn-game-sm px-2.5 py-1 text-white font-bold cursor-pointer"
                         >
                           Padam
                         </button>
@@ -365,7 +368,7 @@ export function AdminDashboard({
                       <button
                         type="button"
                         onClick={() => onDeleteUser(s.id)}
-                        className="px-2.5 py-1 rounded-lg bg-rose-600 text-white font-bold cursor-pointer"
+                        className="btn-game-rose btn-game-sm px-2.5 py-1 text-white font-bold cursor-pointer"
                       >
                         Padam
                       </button>
@@ -406,7 +409,7 @@ export function AdminDashboard({
 
             <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
               <label className="block text-xs font-semibold text-slate-300 mb-2">
-                URL Web App Google Apps Script (Opsional untuk Sync Google Sheets)
+                Pautan Web Google Apps Script (Pilihan untuk Segerak Helaian Google)
               </label>
               <div className="flex gap-2">
                 <input
@@ -418,7 +421,7 @@ export function AdminDashboard({
                 <button
                   type="button"
                   onClick={() => onSaveApi(apiUrl.trim())}
-                  className="px-4 py-2 rounded-xl bg-sky-500 text-slate-950 font-bold text-xs cursor-pointer"
+                  className="btn-game-cyan btn-game-sm px-4 py-2 text-slate-950 font-bold text-xs cursor-pointer"
                 >
                   Simpan
                 </button>

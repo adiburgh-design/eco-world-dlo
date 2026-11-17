@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, FastForward, ShieldAlert, Sparkles, Volume2, VolumeX } from 'lucide-react';
-import { playSFX, setMusicState } from '../utils/sound';
+import { setMusicState } from '../utils/sound';
 
 interface IntroVideoCutsceneProps {
   onComplete: () => void;
@@ -98,6 +98,14 @@ export function IntroVideoCutscene({ onComplete }: IntroVideoCutsceneProps) {
 
   const progressPct = Math.min(100, Math.round((currentTime / Math.max(1, duration)) * 100));
 
+  const finishCutscene = () => {
+    if (videoRef.current) {
+      videoRef.current.pause();
+    }
+    setMusicState({ ducked: false });
+    onComplete();
+  };
+
   return (
     <div className="fixed inset-0 z-40 bg-black flex items-center justify-center overflow-hidden select-none">
       {/* 16:9 Cinema Frame */}
@@ -113,10 +121,7 @@ export function IntroVideoCutscene({ onComplete }: IntroVideoCutsceneProps) {
             onLoadedMetadata={(e) => {
               if (e.currentTarget.duration) setDuration(e.currentTarget.duration);
             }}
-            onEnded={() => {
-              playSFX('portal');
-              onComplete();
-            }}
+            onEnded={finishCutscene}
             onError={() => setVideoError(true)}
             className="w-full h-full object-contain block"
           />
@@ -131,13 +136,11 @@ export function IntroVideoCutscene({ onComplete }: IntroVideoCutsceneProps) {
             </p>
             <button
               type="button"
-              onClick={() => {
-                playSFX('portal');
-                onComplete();
-              }}
-              className="btn-game-emerald font-game px-8 py-3 rounded-2xl text-slate-950 font-black cursor-pointer"
+              onClick={finishCutscene}
+              className="btn-game-emerald font-game px-8 py-3 rounded-2xl text-slate-950 font-black flex items-center gap-2.5 cursor-pointer"
             >
-              TERUSKAN KE PORTAL AKSES →
+              <span className="btn-icon-3d w-7 h-7 text-sm">🚀</span>
+              <span>TERUSKAN KE PORTAL AKSES →</span>
             </button>
           </div>
         )}
@@ -157,22 +160,23 @@ export function IntroVideoCutscene({ onComplete }: IntroVideoCutsceneProps) {
                 setMuted(next);
                 if (videoRef.current) videoRef.current.muted = next;
               }}
-              className="px-3 py-1.5 rounded-xl bg-slate-950/85 hover:bg-slate-900 border border-slate-600 text-xs font-bold text-slate-200 flex items-center gap-1.5 cursor-pointer shadow-lg"
+              className="btn-game-slate btn-game-sm px-3 py-1.5 text-xs font-bold text-slate-100 flex items-center gap-1.5 cursor-pointer"
             >
-              {muted ? <VolumeX className="w-3.5 h-3.5 text-slate-400" /> : <Volume2 className="w-3.5 h-3.5 text-emerald-400" />}
-              <span className="hidden sm:inline">{muted ? 'Suara Video OFF' : 'Suara Video ON'}</span>
+              <span className="btn-icon-3d w-5 h-5">
+                {muted ? <VolumeX className="w-3 h-3 text-slate-300" /> : <Volume2 className="w-3 h-3 text-emerald-300" />}
+              </span>
+              <span className="hidden sm:inline">{muted ? 'Suara Video: Tutup' : 'Suara Video: Buka'}</span>
             </button>
 
             <button
               type="button"
-              onClick={() => {
-                playSFX('portal');
-                onComplete();
-              }}
-              className="btn-game-gold px-4 py-1.5 rounded-xl text-slate-950 font-game text-xs font-black flex items-center gap-1.5 cursor-pointer shadow-lg"
+              onClick={finishCutscene}
+              className="btn-game-gold btn-game-sm px-4 py-1.5 text-slate-950 font-game text-xs font-black flex items-center gap-2 cursor-pointer"
             >
               <span>LANGKAU / MASUK PORTAL</span>
-              <FastForward className="w-3.5 h-3.5" />
+              <span className="btn-icon-3d w-5 h-5">
+                <FastForward className="w-3 h-3" />
+              </span>
             </button>
           </div>
         </div>

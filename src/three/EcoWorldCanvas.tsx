@@ -5,9 +5,6 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { AvatarId, CameraMode, Clue3D, MissionDef, UserAccount } from '../types/game';
 import { M1_CLUES_3D } from '../data/gameData';
 import {
-  AgentRig,
-  buildEcoAgentAvatar,
-  buildInstancedForestAndRocks,
   buildZone1RiverFactory,
   buildZone2ToxicCity,
   buildZone3HopeForest,
@@ -15,8 +12,25 @@ import {
   buildZone5EcoMonument,
   buildZoneBeacon,
 } from './models';
+import { buildAdventureWorld } from './adventureWorld';
+import {
+  animateHumanAgent,
+  buildHumanEcoAgent,
+  HumanAgentRig,
+} from './humanAgents';
 import { buildMissionRoom, MissionRoomHandle } from './missionRooms';
-import { createContactShadowTexture, createTerrainTexture } from './textures';
+import { createContactShadowTexture } from './textures';
+import {
+  findIslandPath,
+  MISSION_PORTAL_WAYPOINTS,
+  resolveAgentCollisions,
+} from './pathfinding';
+import {
+  FootstepSurface,
+  playFootstep,
+  playSFX,
+  unlockAudioOnUserGesture,
+} from '../utils/sound';
 
 export interface EcoWorldCanvasProps {
   user: UserAccount | null;
@@ -26,10 +40,15 @@ export interface EcoWorldCanvasProps {
   activeRoomId: number | null;
   m1CluesFound: string[];
   dpadVector: { x: number; z: number };
+  travelTargetMissionId?: number | null;
   onSelectMission: (missionId: number) => void;
+  onArriveAtMission?: (missionId: number) => void;
+  onTravelPhaseChange?: (phase: 'walking' | 'activating' | null) => void;
+  onTravelFailed?: (missionId: number) => void;
   onCollectClue: (clue: Clue3D) => void;
   onHoverInfo: (label: string | null) => void;
   onProximityZoneChange?: (zoneId: number) => void;
+  paused?: boolean;
 }
 
 // Pre-allocated math helpers (zero GC inside animation loop)
@@ -40,6 +59,133 @@ const _forwardVec = new THREE.Vector3();
 const _rightVec = new THREE.Vector3();
 const _rayOrigin = new THREE.Vector2();
 
+function dampAngle(current: number, target: number, lambda: number, dt: number): number {
+  const delta = Math.atan2(Math.sin(target - current), Math.cos(target - current));
+  return current + delta * (1 - Math.exp(-lambda * dt));
+}
+
+// Zero-allocation point-to-segment squared distance helper for river & stone trails
+function distToSegmentSq(
+  px: number,
+  pz: number,
+  ax: number,
+  az: number,
+  bx: number,
+  bz: number
+): number {
+  const vx = bx - ax;
+  const vz = bz - az;
+  const lenSq = vx * vx + vz * vz;
+  if (lenSq <= 0.0001) return (px - ax) * (px - ax) + (pz - az) * (pz - az);
+  let t = ((px - ax) * vx + (pz - az) * vz) / lenSq;
+  if (t < 0) t = 0;
+  else if (t > 1) t = 1;
+  const dx = px - (ax + vx * t);
+  const dz = pz - (az + vz * t);
+  return dx * dx + dz * dz;
+}
+
+const RIVER_POINTS: [number, number][] = [
+  [-23.5, 3.2],
+  [-17.5, 8.8],
+  [-12.0, 14.5],
+  [-8.2, 21.5],
+  [-5.8, 28.4],
+];
+
+const TRAIL_ROUTES: [number, number][] = [
+  [-15, 10],
+  [-14, -12],
+  [13, -12],
+  [15, 10],
+  [0, 26.5],
+];
+
+function detectIslandSurface(x: number, z: number): FootstepSurface {
+  // 1. Wooden structures: River Bridge (rotated 0.72 rad at [-11.4, 14.5]), Jetty, Front Pier
+  const bdx = x - -11.4;
+  const bdz = z - 14.5;
+  const cosB = 0.7518; // cos(0.72)
+  const sinB = 0.6594; // sin(0.72)
+  const localBx = bdx * cosB - bdz * sinB;
+  const localBz = bdx * sinB + bdz * cosB;
+  if (Math.abs(localBx) <= 3.0 && Math.abs(localBz) <= 1.25) {
+    return 'wood';
+  }
+  if (Math.abs(x - -14.2) <= 1.4 && Math.abs(z - 10.6) <= 0.9) {
+    return 'wood';
+  }
+  if (Math.abs(x) <= 2.3 && z >= 26.8 && z <= 31.2) {
+    return 'wood';
+  }
+
+  // 2. Lab / Futuristic Tile Platforms: Central Eco-Plaza, Makmal Suara (Zone 4), Bandar Eco-City (Zone 2)
+  if (x * x + z * z <= 7.6 * 7.6) {
+    return 'lab';
+  }
+  const dx4 = x - 15;
+  const dz4 = z - 10;
+  if (dx4 * dx4 + dz4 * dz4 <= 5.0 * 5.0) {
+    return 'lab';
+  }
+  const dx2 = x - -14;
+  const dz2 = z - -12;
+  if (dx2 * dx2 + dz2 * dz2 <= 6.2 * 6.2) {
+    return 'lab';
+  }
+
+  // 3. Shallow River / Highland Pool Water
+  const dpx = x - 18.6;
+  const dpz = z - -17.0;
+  if (dpx * dpx + dpz * dpz <= 3.3 * 3.3) {
+    return 'water';
+  }
+  for (let i = 0; i < RIVER_POINTS.length - 1; i++) {
+    const [ax, az] = RIVER_POINTS[i];
+    const [bx, bz] = RIVER_POINTS[i + 1];
+    if (distToSegmentSq(x, z, ax, az, bx, bz) <= 2.55 * 2.55) {
+      return 'water';
+    }
+  }
+
+  // 4. Soil / Cobblestone Walkways, Factory Dirt Yard, Forest Clearing & Rocky Cliff Rim
+  for (let i = 0; i < TRAIL_ROUTES.length; i++) {
+    const [tx, tz] = TRAIL_ROUTES[i];
+    if (distToSegmentSq(x, z, 0, 0, tx, tz) <= 1.45 * 1.45) {
+      return 'soil';
+    }
+  }
+  const dfx = x - -20.8;
+  const dfz = z - 7.6;
+  if (dfx * dfx + dfz * dfz <= 4.4 * 4.4) {
+    return 'soil';
+  }
+  const d3x = x - 13;
+  const d3z = z - -12;
+  if (d3x * d3x + d3z * d3z <= 4.6 * 4.6) {
+    return 'soil';
+  }
+  if (x * x + z * z >= 22.8 * 22.8) {
+    return 'soil';
+  }
+
+  // 5. Lush Island Grass Meadow (Default)
+  return 'grass';
+}
+
+interface PortalSequenceState {
+  missionId: number;
+  elapsed: number;
+  duration: number;
+  ignited: boolean;
+  startX: number;
+  startZ: number;
+  targetX: number;
+  targetZ: number;
+  portalCenterX: number;
+  portalCenterZ: number;
+}
+
 export function EcoWorldCanvas({
   user,
   missions,
@@ -48,10 +194,15 @@ export function EcoWorldCanvas({
   activeRoomId,
   m1CluesFound,
   dpadVector,
+  travelTargetMissionId = null,
   onSelectMission,
+  onArriveAtMission,
+  onTravelPhaseChange,
+  onTravelFailed,
   onCollectClue,
   onHoverInfo,
   onProximityZoneChange,
+  paused = false,
 }: EcoWorldCanvasProps) {
   const mountRef = useRef<HTMLDivElement>(null);
 
@@ -64,10 +215,15 @@ export function EcoWorldCanvas({
     activeRoomId,
     m1CluesFound,
     dpadVector,
+    travelTargetMissionId,
     onSelectMission,
+    onArriveAtMission,
+    onTravelPhaseChange,
+    onTravelFailed,
     onCollectClue,
     onHoverInfo,
     onProximityZoneChange,
+    paused,
   });
   propsRef.current = {
     user,
@@ -77,19 +233,61 @@ export function EcoWorldCanvas({
     activeRoomId,
     m1CluesFound,
     dpadVector,
+    travelTargetMissionId,
     onSelectMission,
+    onArriveAtMission,
+    onTravelPhaseChange,
+    onTravelFailed,
     onCollectClue,
     onHoverInfo,
     onProximityZoneChange,
+    paused,
   };
   const lastProxZoneRef = useRef<number>(0);
+  const hoveredMissionIdRef = useRef<number | null>(null);
 
-  // Ref for triggering avatar auto-walk to a clicked zone or ground point
-  const navGoalRef = useRef<THREE.Vector3 | null>(null);
+  // Live avatar position + A* waypoint queue + portal activation sequence
+  const agentPosRef = useRef<{ x: number; z: number }>({ x: 0, z: 5.2 });
+  const waypointsRef = useRef<THREE.Vector3[]>([]);
+  const pendingArrivalMissionIdRef = useRef<number | null>(null);
+  const portalAnimRef = useRef<PortalSequenceState | null>(null);
   const userOrbitingRef = useRef(false);
   const prevFocusRef = useRef<number>(focusedMissionId);
   const prevCamModeRef = useRef<CameraMode>(cameraMode);
   const prevRoomIdRef = useRef<number | null>(activeRoomId);
+
+  useEffect(() => {
+    if (travelTargetMissionId) {
+      userOrbitingRef.current = false;
+      portalAnimRef.current = null;
+      const wp = MISSION_PORTAL_WAYPOINTS[travelTargetMissionId];
+      if (!wp) {
+        propsRef.current.onTravelFailed?.(travelTargetMissionId);
+        return;
+      }
+      const path = findIslandPath(
+        agentPosRef.current.x,
+        agentPosRef.current.z,
+        wp.entrance[0],
+        wp.entrance[1]
+      );
+      if (!path || path.length === 0) {
+        waypointsRef.current = [];
+        pendingArrivalMissionIdRef.current = null;
+        propsRef.current.onTravelPhaseChange?.(null);
+        propsRef.current.onTravelFailed?.(travelTargetMissionId);
+        return;
+      }
+      waypointsRef.current = path;
+      pendingArrivalMissionIdRef.current = travelTargetMissionId;
+      propsRef.current.onTravelPhaseChange?.('walking');
+    } else {
+      pendingArrivalMissionIdRef.current = null;
+      portalAnimRef.current = null;
+      waypointsRef.current = [];
+      propsRef.current.onTravelPhaseChange?.(null);
+    }
+  }, [travelTargetMissionId]);
 
   useEffect(() => {
     if (prevRoomIdRef.current !== activeRoomId) {
@@ -101,19 +299,28 @@ export function EcoWorldCanvas({
       prevCamModeRef.current !== cameraMode
     ) {
       userOrbitingRef.current = false;
-      const targetMission = missions.find((m) => m.id === focusedMissionId);
-      if (targetMission && (cameraMode === 'zone' || prevFocusRef.current !== focusedMissionId)) {
-        // Walk agent near the selected zone (offset slightly toward plaza center)
-        const [zx, , zz] = targetMission.position;
-        const len = Math.hypot(zx, zz) || 1;
-        const offsetX = zx === 0 && zz === 0 ? 0 : zx - (zx / len) * 3.8;
-        const offsetZ = zx === 0 && zz === 0 ? 4.2 : zz - (zz / len) * 3.8;
-        navGoalRef.current = new THREE.Vector3(offsetX, 0, offsetZ);
+      const wp = MISSION_PORTAL_WAYPOINTS[focusedMissionId];
+      if (
+        !travelTargetMissionId &&
+        !portalAnimRef.current &&
+        wp &&
+        (cameraMode === 'zone' || prevFocusRef.current !== focusedMissionId)
+      ) {
+        // Walk agent near the focused zone entrance smoothly without entering portal
+        const path = findIslandPath(
+          agentPosRef.current.x,
+          agentPosRef.current.z,
+          wp.entrance[0],
+          wp.entrance[1]
+        );
+        if (path && path.length > 0) {
+          waypointsRef.current = path;
+        }
       }
       prevFocusRef.current = focusedMissionId;
       prevCamModeRef.current = cameraMode;
     }
-  }, [focusedMissionId, cameraMode, activeRoomId, missions]);
+  }, [focusedMissionId, cameraMode, activeRoomId, travelTargetMissionId]);
 
   useEffect(() => {
     const container = mountRef.current;
@@ -145,15 +352,15 @@ export function EcoWorldCanvas({
     renderer.setPixelRatio(isSoftwareGl ? 1 : Math.min(window.devicePixelRatio, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.1;
+    renderer.toneMappingExposure = 1.12;
     renderer.shadowMap.enabled = !isSoftwareGl;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     container.appendChild(renderer.domElement);
 
     const scene = new THREE.Scene();
-    const skyColor = new THREE.Color(0x0c4a6e);
+    const skyColor = new THREE.Color(0x38bdf8);
     scene.background = skyColor;
-    scene.fog = new THREE.FogExp2(0x0c4a6e, 0.0085);
+    scene.fog = new THREE.FogExp2(0x7dd3fc, 0.0048);
 
     // Studio Environment Reflection (PMREM RoomEnvironment)
     const pmremGenerator = new THREE.PMREMGenerator(renderer);
@@ -162,34 +369,34 @@ export function EcoWorldCanvas({
     pmremGenerator.dispose();
 
     const camera = new THREE.PerspectiveCamera(50, width / height, 0.5, 240);
-    camera.position.set(0, 26, 38);
+    camera.position.set(0, 26, 42);
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = !isSoftwareGl;
     controls.dampingFactor = 0.06;
     controls.maxPolarAngle = Math.PI / 2.15;
     controls.minPolarAngle = 0.25;
-    controls.minDistance = 10;
-    controls.maxDistance = 75;
+    controls.minDistance = 8;
+    controls.maxDistance = 78;
     controls.target.set(0, 1.5, 0);
 
     controls.addEventListener('start', () => {
       userOrbitingRef.current = true;
     });
 
-    // 2. Three-Point Warm/Cool Lighting Rig
-    const hemiLight = new THREE.HemisphereLight(0xbae6fd, 0x1e3a2f, 0.85);
+    // 2. Cheerful Warm/Cool Sunlit Lighting Rig
+    const hemiLight = new THREE.HemisphereLight(0xe0f2fe, 0x3f8f4e, 1.05);
     hemiLight.position.set(0, 50, 0);
     scene.add(hemiLight);
 
-    const sunLight = new THREE.DirectionalLight(0xfffbeb, 1.85);
-    sunLight.position.set(28, 38, 22);
+    const sunLight = new THREE.DirectionalLight(0xfffbeb, 2.05);
+    sunLight.position.set(26, 40, 24);
     sunLight.castShadow = !isSoftwareGl;
     sunLight.shadow.mapSize.width = 2048;
     sunLight.shadow.mapSize.height = 2048;
     sunLight.shadow.camera.near = 5;
-    sunLight.shadow.camera.far = 110;
-    const d = 34;
+    sunLight.shadow.camera.far = 115;
+    const d = 35;
     sunLight.shadow.camera.left = -d;
     sunLight.shadow.camera.right = d;
     sunLight.shadow.camera.top = d;
@@ -198,70 +405,21 @@ export function EcoWorldCanvas({
     sunLight.shadow.normalBias = 0.02;
     scene.add(sunLight);
 
-    const rimLight = new THREE.DirectionalLight(0x38bdf8, 0.55);
-    rimLight.position.set(-25, 16, -28);
+    const rimLight = new THREE.DirectionalLight(0x7dd3fc, 0.65);
+    rimLight.position.set(-28, 22, -28);
     scene.add(rimLight);
 
-    // 3. Ocean & EcoWorld Island Terrain (inside islandWorldGroup so rooms can replace view cleanly)
+    // 3. Floating 3D Adventure Island World (inside islandWorldGroup so rooms replace view cleanly)
     const islandWorldGroup = new THREE.Group();
     scene.add(islandWorldGroup);
 
     const maxAnisotropy = renderer.capabilities.getMaxAnisotropy();
-    const terrainTex = createTerrainTexture(maxAnisotropy);
     const shadowTex = createContactShadowTexture();
 
-    const oceanMesh = new THREE.Mesh(
-      new THREE.CircleGeometry(140, 48),
-      new THREE.MeshStandardMaterial({
-        color: 0x0369a1,
-        roughness: 0.16,
-        metalness: 0.35,
-      })
-    );
-    oceanMesh.rotation.x = -Math.PI / 2;
-    oceanMesh.position.y = -0.38;
-    oceanMesh.receiveShadow = true;
-    islandWorldGroup.add(oceanMesh);
+    const advWorld = buildAdventureWorld(propsRef.current.missions, maxAnisotropy);
+    islandWorldGroup.add(advWorld.group);
 
-    const islandMesh = new THREE.Mesh(
-      new THREE.CylinderGeometry(29.5, 31.5, 1.1, 48),
-      new THREE.MeshStandardMaterial({
-        map: terrainTex,
-        roughness: 0.88,
-        metalness: 0.02,
-      })
-    );
-    islandMesh.position.y = -0.55;
-    islandMesh.receiveShadow = true;
-    islandWorldGroup.add(islandMesh);
-
-    // Glowing Golden Adventure Trails connecting Plaza (0,0,0) to Zones 1–4
-    const trailMat = new THREE.MeshStandardMaterial({
-      color: 0xfde047,
-      emissive: 0xca8a04,
-      emissiveIntensity: 0.3,
-      roughness: 0.5,
-      polygonOffset: true,
-      polygonOffsetFactor: -1,
-      polygonOffsetUnits: -1,
-    });
-    propsRef.current.missions
-      .filter((m) => m.id !== 5)
-      .forEach((m) => {
-        const pathCurve = new THREE.CatmullRomCurve3([
-          new THREE.Vector3(0, 0.04, 0),
-          new THREE.Vector3(m.position[0] * 0.5, 0.04, m.position[2] * 0.5 + 1.8),
-          new THREE.Vector3(m.position[0], 0.04, m.position[2]),
-        ]);
-        const pathGeo = new THREE.TubeGeometry(pathCurve, 20, 0.55, 6, false);
-        pathGeo.scale(1, 0.08, 1);
-        const pathMesh = new THREE.Mesh(pathGeo, trailMat);
-        pathMesh.position.y = 0.03;
-        pathMesh.receiveShadow = true;
-        islandWorldGroup.add(pathMesh);
-      });
-
-    // 4. Build All 5 Interactive 3D Zones & Perimeter Environment
+    // 4. Build All 5 Interactive 3D Zones
     const zone1 = buildZone1RiverFactory(maxAnisotropy);
     islandWorldGroup.add(zone1.group);
 
@@ -277,22 +435,24 @@ export function EcoWorldCanvas({
     const zone5 = buildZone5EcoMonument(maxAnisotropy);
     islandWorldGroup.add(zone5.group);
 
-    buildInstancedForestAndRocks(
-      islandWorldGroup,
-      propsRef.current.missions.map((m) => m.position)
-    );
-
-    // Zone Waypoint Beacons
+    // Zone Waypoint Beacons & Vertical Portal Gateways
     const beacons = propsRef.current.missions.map((m) => {
-      const b = buildZoneBeacon(m.id, m.shortTitle, `Misi ${m.id}`, m.color);
+      const wp = MISSION_PORTAL_WAYPOINTS[m.id];
+      const facingOffset: [number, number] | undefined = wp
+        ? [wp.entrance[0] - m.position[0], wp.entrance[1] - m.position[2]]
+        : undefined;
+      const b = buildZoneBeacon(m.id, m.shortTitle, `Misi ${m.id}`, m.color, facingOffset);
       b.group.position.set(m.position[0], 0, m.position[2]);
       islandWorldGroup.add(b.group);
-      return { missionId: m.id, ...b };
+      return { missionId: m.id, baseColor: new THREE.Color(m.color), ...b };
     });
 
-    // 5. Playable 3D Ejen Avatar
+    // 5. Playable 3D Human Eco-Guardian Avatar
     let currentAvatarId: AvatarId = propsRef.current.user?.avatar || 'rimba';
-    let agentRig: AgentRig = buildEcoAgentAvatar(currentAvatarId, shadowTex);
+    let agentRig: HumanAgentRig = buildHumanEcoAgent(currentAvatarId, shadowTex, {
+      maxAnisotropy,
+      showPedestal: false,
+    });
     agentRig.group.position.set(0, 0, 5.2);
     islandWorldGroup.add(agentRig.group);
 
@@ -302,7 +462,10 @@ export function EcoWorldCanvas({
       const rotY = agentRig.group.rotation.y;
       islandWorldGroup.remove(agentRig.group);
       currentAvatarId = nextId;
-      agentRig = buildEcoAgentAvatar(nextId, shadowTex);
+      agentRig = buildHumanEcoAgent(nextId, shadowTex, {
+        maxAnisotropy,
+        showPedestal: false,
+      });
       agentRig.group.position.copy(pos);
       agentRig.group.rotation.y = rotY;
       islandWorldGroup.add(agentRig.group);
@@ -332,8 +495,14 @@ export function EcoWorldCanvas({
         return;
       }
       keys[e.code] = true;
-      if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
-        navGoalRef.current = null;
+      if (
+        !pendingArrivalMissionIdRef.current &&
+        !portalAnimRef.current &&
+        ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(
+          e.code
+        )
+      ) {
+        waypointsRef.current = [];
       }
     };
     const onKeyUp = (e: KeyboardEvent) => {
@@ -364,11 +533,13 @@ export function EcoWorldCanvas({
     };
 
     const onPointerDown = (e: PointerEvent) => {
+      unlockAudioOnUserGesture();
       pointerDownPos = { x: e.clientX, y: e.clientY };
     };
 
     const onPointerMove = (e: PointerEvent) => {
       if (propsRef.current.activeRoomId) {
+        hoveredMissionIdRef.current = null;
         renderer.domElement.style.cursor = 'grab';
         propsRef.current.onHoverInfo(null);
         return;
@@ -385,13 +556,16 @@ export function EcoWorldCanvas({
         const ud = hits[0].object.userData;
         renderer.domElement.style.cursor = 'pointer';
         if (ud.type === 'zone') {
+          hoveredMissionIdRef.current = ud.missionId;
           const m = propsRef.current.missions.find((x) => x.id === ud.missionId);
           propsRef.current.onHoverInfo(m ? `Klik untuk buka Misi ${m.id}: ${m.title}` : null);
         } else if (ud.type === 'clue') {
+          hoveredMissionIdRef.current = null;
           const clue = M1_CLUES_3D.find((c) => c.id === ud.clueId);
           propsRef.current.onHoverInfo(clue ? `🔍 Bukti 3D: ${clue.title}` : null);
         }
       } else {
+        hoveredMissionIdRef.current = null;
         renderer.domElement.style.cursor = 'grab';
         propsRef.current.onHoverInfo(null);
       }
@@ -410,8 +584,16 @@ export function EcoWorldCanvas({
         const ud = hits[0].object.userData;
         if (ud.type === 'clue') {
           const clue = M1_CLUES_3D.find((c) => c.id === ud.clueId);
-          if (clue) {
-            navGoalRef.current = new THREE.Vector3(clue.position[0], 0, clue.position[2] + 1.8);
+          if (clue && !pendingArrivalMissionIdRef.current && !portalAnimRef.current) {
+            const cluePath = findIslandPath(
+              agentRig.group.position.x,
+              agentRig.group.position.z,
+              clue.position[0],
+              clue.position[2] + 1.8
+            );
+            if (cluePath && cluePath.length > 0) {
+              waypointsRef.current = cluePath;
+            }
             propsRef.current.onCollectClue(clue);
           }
           return;
@@ -422,15 +604,27 @@ export function EcoWorldCanvas({
         }
       }
 
-      // Click-to-walk on island ground if logged in as student
-      if (propsRef.current.user?.role === 'murid') {
+      // Click-to-walk on island ground if logged in as student (disabled during auto-walk / portal entry)
+      if (
+        propsRef.current.user?.role === 'murid' &&
+        !pendingArrivalMissionIdRef.current &&
+        !portalAnimRef.current
+      ) {
         groundRaycaster.setFromCamera(_rayOrigin, camera);
-        const groundHits = groundRaycaster.intersectObject(islandMesh, false);
+        const groundHits = groundRaycaster.intersectObject(advWorld.islandGround, false);
         if (groundHits.length > 0) {
           const pt = groundHits[0].point;
           const distFromCenter = Math.hypot(pt.x, pt.z);
-          if (distFromCenter < 25) {
-            navGoalRef.current = new THREE.Vector3(pt.x, 0, pt.z);
+          if (distFromCenter < 24.4) {
+            const walkPath = findIslandPath(
+              agentRig.group.position.x,
+              agentRig.group.position.z,
+              pt.x,
+              pt.z
+            );
+            if (walkPath && walkPath.length > 0) {
+              waypointsRef.current = walkPath;
+            }
           }
         }
       }
@@ -465,6 +659,7 @@ export function EcoWorldCanvas({
     const clock = new THREE.Clock();
     let frameId = 0;
     let disposed = false;
+    let lastFootstepIdx = -1;
 
     function afterDraw(cb: () => void) {
       const gl = renderer.getContext() as WebGL2RenderingContext;
@@ -489,6 +684,12 @@ export function EcoWorldCanvas({
 
     function tick() {
       if (disposed) return;
+      if (propsRef.current.paused) {
+        lastFootstepIdx = -1;
+        clock.getDelta();
+        frameId = window.setTimeout(tick, 120);
+        return;
+      }
       const dt = Math.min(clock.getDelta(), 0.1);
       const elapsed = clock.getElapsedTime();
       const {
@@ -542,24 +743,31 @@ export function EcoWorldCanvas({
         }
         return;
       } else {
-        skyColor.setHex(0x0c4a6e);
-        (scene.fog as THREE.FogExp2).color.setHex(0x0c4a6e);
-        (scene.fog as THREE.FogExp2).density = 0.0085;
-        controls.minDistance = 10;
-        controls.maxDistance = 75;
+        skyColor.setHex(0x38bdf8);
+        (scene.fog as THREE.FogExp2).color.setHex(0x7dd3fc);
+        (scene.fog as THREE.FogExp2).density = 0.0048;
+        controls.minDistance = 8;
+        controls.maxDistance = 78;
         controls.maxPolarAngle = Math.PI / 2.15;
       }
+
+      // Animate floating island environment (clouds, waterfalls, birds, butterflies, sun, portal)
+      advWorld.animate(elapsed, dt);
 
       // Update Avatar appearance if student switched avatar
       if (curUser?.avatar) {
         rebuildAgentIfChanged(curUser.avatar);
       }
 
-      // Show 3D avatar unless viewing in First-Person POV
-      const isFpsMode = curUser?.role === 'murid' && curCamMode === 'firstPerson';
+      // Show 3D avatar unless viewing in First-Person POV (always visible during scripted portal travel)
+      const isFpsMode =
+        curUser?.role === 'murid' &&
+        curCamMode === 'firstPerson' &&
+        pendingArrivalMissionIdRef.current === null &&
+        portalAnimRef.current === null;
       agentRig.group.visible = !isFpsMode;
 
-      // Keyboard / D-Pad / Click-to-Walk Avatar Movement
+      // Keyboard / D-Pad / A* Pathfinding / Portal Ignition Sequence
       let inputX = curDpad.x;
       let inputZ = curDpad.z;
       if (keys['KeyW'] || keys['ArrowUp']) inputZ -= 1;
@@ -568,7 +776,50 @@ export function EcoWorldCanvas({
       if (keys['KeyD'] || keys['ArrowRight']) inputX += 1;
 
       let isMoving = false;
-      if (curUser?.role === 'murid' && (Math.abs(inputX) > 0.05 || Math.abs(inputZ) > 0.05)) {
+      const portalSeq = portalAnimRef.current;
+
+      if (portalSeq) {
+        // Cinematic Portal Entrance Sequence: stop -> face portal -> ignite -> step into portal
+        portalSeq.elapsed += dt;
+        const p = Math.min(1, portalSeq.elapsed / portalSeq.duration);
+        const faceAngle = Math.atan2(
+          portalSeq.portalCenterX - agentRig.group.position.x,
+          portalSeq.portalCenterZ - agentRig.group.position.z
+        );
+        agentRig.group.rotation.y = dampAngle(agentRig.group.rotation.y, faceAngle, 12, dt);
+
+        if (p > 0.36) {
+          const stepT = Math.min(1, (p - 0.36) / 0.56);
+          const smoothT = stepT * stepT * (3 - 2 * stepT);
+          agentRig.group.position.x = THREE.MathUtils.lerp(portalSeq.startX, portalSeq.targetX, smoothT);
+          agentRig.group.position.z = THREE.MathUtils.lerp(portalSeq.startZ, portalSeq.targetZ, smoothT);
+          agentRig.group.position.y = Math.sin(stepT * Math.PI) * 0.38;
+          isMoving = stepT < 0.85;
+        }
+        if (p > 0.85) {
+          const shrink = Math.max(0.25, 1 - ((p - 0.85) / 0.15) * 0.72);
+          agentRig.group.scale.setScalar(shrink);
+        }
+        if (p >= 0.62 && !portalSeq.ignited) {
+          portalSeq.ignited = true;
+          playSFX('portal');
+        }
+        if (p >= 1) {
+          const arrivedId = portalSeq.missionId;
+          agentRig.group.position.y = 0;
+          agentRig.group.scale.setScalar(1);
+          portalAnimRef.current = null;
+          pendingArrivalMissionIdRef.current = null;
+          propsRef.current.onTravelPhaseChange?.(null);
+          propsRef.current.onArriveAtMission?.(arrivedId);
+        }
+      } else if (
+        pendingArrivalMissionIdRef.current === null &&
+        curUser?.role === 'murid' &&
+        (Math.abs(inputX) > 0.05 || Math.abs(inputZ) > 0.05)
+      ) {
+        agentRig.group.position.y = 0;
+        agentRig.group.scale.setScalar(1);
         if (isFpsMode) {
           userOrbitingRef.current = false;
           // In First-Person POV: A/D rotates view, W/S walks forward/backward along facing vector
@@ -580,15 +831,17 @@ export function EcoWorldCanvas({
             _moveDir.set(Math.sin(rotY), 0, Math.cos(rotY)).multiplyScalar(-inputZ);
             const speed = 9.5;
             agentRig.group.position.addScaledVector(_moveDir, speed * dt);
-            const r = Math.hypot(agentRig.group.position.x, agentRig.group.position.z);
-            if (r > 25.5) {
-              agentRig.group.position.x *= 25.5 / r;
-              agentRig.group.position.z *= 25.5 / r;
-            }
+            const resolved = resolveAgentCollisions(
+              agentRig.group.position.x,
+              agentRig.group.position.z,
+              0.52
+            );
+            agentRig.group.position.x = resolved.x;
+            agentRig.group.position.z = resolved.z;
             isMoving = true;
           }
         } else {
-          // Camera-relative movement on XZ plane
+          // Camera-relative movement on XZ plane with smooth obstacle collision sliding
           camera.getWorldDirection(_forwardVec);
           _forwardVec.y = 0;
           _forwardVec.normalize();
@@ -602,59 +855,88 @@ export function EcoWorldCanvas({
             _moveDir.normalize();
             const speed = 9.5;
             agentRig.group.position.addScaledVector(_moveDir, speed * dt);
-            // Keep inside playable island radius (25.5)
-            const r = Math.hypot(agentRig.group.position.x, agentRig.group.position.z);
-            if (r > 25.5) {
-              agentRig.group.position.x *= 25.5 / r;
-              agentRig.group.position.z *= 25.5 / r;
-            }
-            const targetRot = Math.atan2(_moveDir.x, _moveDir.z);
-            agentRig.group.rotation.y = THREE.MathUtils.damp(
-              agentRig.group.rotation.y,
-              targetRot,
-              10,
-              dt
+            const resolved = resolveAgentCollisions(
+              agentRig.group.position.x,
+              agentRig.group.position.z,
+              0.52
             );
+            agentRig.group.position.x = resolved.x;
+            agentRig.group.position.z = resolved.z;
+            const targetRot = Math.atan2(_moveDir.x, _moveDir.z);
+            agentRig.group.rotation.y = dampAngle(agentRig.group.rotation.y, targetRot, 11, dt);
             isMoving = true;
           }
         }
-      } else if (navGoalRef.current) {
-        _moveDir.subVectors(navGoalRef.current, agentRig.group.position);
+      } else if (waypointsRef.current.length > 0) {
+        agentRig.group.position.y = 0;
+        agentRig.group.scale.setScalar(1);
+        const currentWp = waypointsRef.current[0];
+        _moveDir.subVectors(currentWp, agentRig.group.position);
         _moveDir.y = 0;
         const dist = _moveDir.length();
-        if (dist > 0.4) {
+        const isFinalWp = waypointsRef.current.length === 1;
+        const arriveThreshold = isFinalWp ? (pendingArrivalMissionIdRef.current ? 0.55 : 0.4) : 0.48;
+
+        if (dist > arriveThreshold) {
           _moveDir.normalize();
-          const speed = 10.5;
+          const speed = pendingArrivalMissionIdRef.current ? 11.8 : 9.8;
           agentRig.group.position.addScaledVector(_moveDir, Math.min(speed * dt, dist));
           const targetRot = Math.atan2(_moveDir.x, _moveDir.z);
-          agentRig.group.rotation.y = THREE.MathUtils.damp(
-            agentRig.group.rotation.y,
-            targetRot,
-            10,
-            dt
-          );
+          agentRig.group.rotation.y = dampAngle(agentRig.group.rotation.y, targetRot, 12, dt);
           isMoving = true;
         } else {
-          navGoalRef.current = null;
+          waypointsRef.current.shift();
+          if (waypointsRef.current.length === 0) {
+            const arrivedId = pendingArrivalMissionIdRef.current;
+            if (arrivedId !== null) {
+              const wp = MISSION_PORTAL_WAYPOINTS[arrivedId];
+              const pc = wp ? wp.portalCenter : [agentRig.group.position.x, agentRig.group.position.z];
+              playSFX('portal_charge');
+              propsRef.current.onTravelPhaseChange?.('activating');
+              portalAnimRef.current = {
+                missionId: arrivedId,
+                elapsed: 0,
+                duration: 1.15,
+                ignited: false,
+                startX: agentRig.group.position.x,
+                startZ: agentRig.group.position.z,
+                targetX: agentRig.group.position.x * 0.62 + pc[0] * 0.38,
+                targetZ: agentRig.group.position.z * 0.62 + pc[1] * 0.38,
+                portalCenterX: pc[0],
+                portalCenterZ: pc[1],
+              };
+            }
+          }
         }
+      } else {
+        agentRig.group.position.y = 0;
+        agentRig.group.scale.setScalar(1);
       }
 
-      // Avatar Walk Cycle & Jetpack Bobbing
-      if (isMoving) {
-        const swing = Math.sin(elapsed * 12) * 0.55;
-        agentRig.leftLeg.rotation.x = swing;
-        agentRig.rightLeg.rotation.x = -swing;
-        agentRig.leftArm.rotation.x = -swing * 0.7;
-        agentRig.rightArm.rotation.x = swing * 0.7;
-        agentRig.group.position.y = Math.abs(Math.sin(elapsed * 12)) * 0.14;
+      agentPosRef.current.x = agentRig.group.position.x;
+      agentPosRef.current.z = agentRig.group.position.z;
+
+      // Human Guardian Natural Idle, Blinking, Breathing, Greeting Wave & Walk Cycle
+      animateHumanAgent(agentRig, elapsed, dt, {
+        isMoving,
+        hovered: false,
+        selected: true,
+      });
+
+      // Surface-specific 3D Footstep SFX synced with agent walk cycle
+      if (isMoving && curUser?.role === 'murid') {
+        const stepIdx = Math.floor((elapsed * 11.5) / Math.PI);
+        if (stepIdx !== lastFootstepIdx) {
+          lastFootstepIdx = stepIdx;
+          const surface = detectIslandSurface(
+            agentRig.group.position.x,
+            agentRig.group.position.z
+          );
+          playFootstep(surface, stepIdx % 2 === 0 ? 'left' : 'right');
+        }
       } else {
-        agentRig.leftLeg.rotation.x = THREE.MathUtils.damp(agentRig.leftLeg.rotation.x, 0, 8, dt);
-        agentRig.rightLeg.rotation.x = THREE.MathUtils.damp(agentRig.rightLeg.rotation.x, 0, 8, dt);
-        agentRig.leftArm.rotation.x = THREE.MathUtils.damp(agentRig.leftArm.rotation.x, 0, 8, dt);
-        agentRig.rightArm.rotation.x = THREE.MathUtils.damp(agentRig.rightArm.rotation.x, 0, 8, dt);
-        agentRig.group.position.y = THREE.MathUtils.damp(agentRig.group.position.y, 0, 8, dt);
+        lastFootstepIdx = -1;
       }
-      agentRig.jetCore.scale.y = 0.9 + Math.sin(elapsed * 8) * 0.15;
 
       // Proximity Zone Detection for Adaptive Ambient Music
       if (curUser?.role === 'murid' && propsRef.current.onProximityZoneChange) {
@@ -682,13 +964,16 @@ export function EcoWorldCanvas({
       const m3Done = Boolean(curUser?.progress?.m3.completed);
       const m4Done = Boolean(curUser?.progress?.m4.completed);
 
-      // River cleans up from dark polluted sludge to vibrant blue when Misi 1 finishes
+      // Bright flowing turquoise river & bobbing rescue boat (factory pipe signals pollution until solved)
+      zone1.riverTex.offset.x -= dt * 0.42;
+      zone1.rescueBoat.position.y = 0.24 + Math.sin(elapsed * 2.2) * 0.06;
+      zone1.rescueBoat.rotation.z = Math.sin(elapsed * 1.8) * 0.04;
       zone1.riverMat.color.lerp(
-        new THREE.Color(m1Done ? 0x0ea5e9 : 0x1e293b),
+        new THREE.Color(m1Done ? 0x38bdf8 : 0x06b6d4),
         Math.min(1, dt * 2.5)
       );
       zone1.riverMat.emissive.lerp(
-        new THREE.Color(m1Done ? 0x0369a1 : 0x0f172a),
+        new THREE.Color(m1Done ? 0x0ea5e9 : 0x0284c7),
         Math.min(1, dt * 2.5)
       );
       zone1.sludgeStream.visible = !m1Done;
@@ -737,43 +1022,175 @@ export function EcoWorldCanvas({
       zone5.earthGlobe.rotation.y += dt * 0.35;
       zone5.goldRing.rotation.z += dt * 0.5;
 
-      // Zone Beacons floating crystal animation & completion color
+      // Zone Beacons floating crystal, portal gateway arches, swirling vortex, light beam & shockwave
+      const activeSelectId = propsRef.current.travelTargetMissionId ?? curFocusId;
+      const activePortalSeq = portalAnimRef.current;
       beacons.forEach((b, idx) => {
-        b.crystal.rotation.y += dt * 1.4;
-        b.crystal.position.y = 4.6 + Math.sin(elapsed * 2.4 + idx) * 0.32;
-        b.ring.rotation.z += dt * 0.3;
+        const isHighlighted =
+          hoveredMissionIdRef.current === b.missionId || activeSelectId === b.missionId;
+        const isActivating = Boolean(activePortalSeq && activePortalSeq.missionId === b.missionId);
+        const actProg = isActivating && activePortalSeq
+          ? Math.min(1, activePortalSeq.elapsed / activePortalSeq.duration)
+          : 0;
+
         const mKey = `m${b.missionId}` as 'm1' | 'm2' | 'm3' | 'm4' | 'm5';
         const mp = curUser?.progress?.[mKey];
         const done = Boolean(mp && ('submitted' in mp ? mp.submitted : mp.completed));
         const unlocked = (curUser?.unlockedMission ?? 1) >= b.missionId;
+        const lockedForStudent = !unlocked && curUser?.role === 'murid';
+
+        const hoverScale = THREE.MathUtils.damp(
+          b.crystal.scale.x,
+          isActivating ? 1.38 : isHighlighted ? 1.24 : 1.0,
+          8,
+          dt
+        );
+        b.crystal.scale.setScalar(hoverScale);
+        b.crystal.rotation.y += dt * (isActivating ? 5.2 : isHighlighted ? 2.4 : 1.4);
+        b.crystal.position.y =
+          (isHighlighted ? 4.9 : 4.6) + Math.sin(elapsed * 2.4 + idx) * 0.32;
+
+        b.starMesh.rotation.y += dt * (isActivating ? 5.6 : isHighlighted ? 3.0 : 1.9);
+        b.starMesh.position.y =
+          (isHighlighted ? 5.95 : 5.65) + Math.sin(elapsed * 2.6 + idx) * 0.26;
+        b.starMesh.scale.setScalar(isActivating ? 1.35 : isHighlighted ? 1.22 : 1.0);
+
+        b.ring.rotation.z += dt * (isActivating ? 2.4 : 0.45);
+        b.outerRing.rotation.z -= dt * (isActivating ? 2.8 : 0.55);
+        const ringPulse = isActivating
+          ? 1.24 + Math.sin(elapsed * 16) * 0.08
+          : isHighlighted
+          ? 1.12 + Math.sin(elapsed * 5) * 0.06
+          : 1.0;
+        b.ring.scale.setScalar(THREE.MathUtils.damp(b.ring.scale.x, ringPulse, 8, dt));
+        b.outerRing.scale.setScalar(THREE.MathUtils.damp(b.outerRing.scale.x, ringPulse, 8, dt));
+
+        const rMat = b.ring.material as THREE.MeshStandardMaterial;
+        rMat.emissiveIntensity = isActivating
+          ? 2.2
+          : lockedForStudent
+          ? 0.28
+          : isHighlighted
+          ? 1.45 + Math.sin(elapsed * 5) * 0.35
+          : 0.85;
+
         const cMat = b.crystal.material as THREE.MeshPhysicalMaterial;
         if (done) {
           cMat.color.setHex(0xfacc15);
           cMat.emissive.setHex(0xeab308);
-        } else if (!unlocked && curUser?.role === 'murid') {
+        } else if (lockedForStudent) {
           cMat.color.setHex(0x64748b);
           cMat.emissive.setHex(0x334155);
+        } else {
+          cMat.color.copy(b.baseColor);
+          cMat.emissive.copy(b.baseColor);
+        }
+        cMat.emissiveIntensity = isActivating ? 1.6 : isHighlighted ? 1.15 : 0.65;
+
+        // Vertical Portal Gateway Arch, Vortex Disc, Light Beam & Orbiting Sparks
+        const archMat = b.portalArchRing.material as THREE.MeshStandardMaterial;
+        archMat.emissiveIntensity = isActivating
+          ? 2.3
+          : lockedForStudent
+          ? 0.18
+          : isHighlighted
+          ? 1.25
+          : 0.72;
+        const archScale = THREE.MathUtils.damp(
+          b.portalArchGroup.scale.x,
+          isActivating ? 1.16 : isHighlighted ? 1.06 : 1.0,
+          8,
+          dt
+        );
+        b.portalArchGroup.scale.setScalar(archScale);
+
+        const vortexMat = b.portalVortex.material as THREE.MeshBasicMaterial;
+        vortexMat.opacity = isActivating
+          ? 0.28 + actProg * 0.66
+          : lockedForStudent
+          ? 0.05
+          : isHighlighted
+          ? 0.28 + Math.sin(elapsed * 4.5) * 0.08
+          : 0.14 + Math.sin(elapsed * 2.5 + idx) * 0.04;
+        b.portalVortex.rotation.z += dt * (isActivating ? 6.5 : 1.4);
+
+        const beamMat = b.lightBeam.material as THREE.MeshBasicMaterial;
+        beamMat.opacity = isActivating
+          ? Math.sin(actProg * Math.PI) * 0.45 + actProg * 0.35
+          : isHighlighted && !lockedForStudent
+          ? 0.12 + Math.sin(elapsed * 4) * 0.04
+          : 0;
+        b.lightBeam.scale.set(
+          1 + actProg * 0.35,
+          1,
+          1 + actProg * 0.35
+        );
+        b.lightBeam.rotation.y += dt * (isActivating ? 3.2 : 0.6);
+
+        const shockMat = b.shockwaveRing.material as THREE.MeshBasicMaterial;
+        if (isActivating) {
+          const waveScale = 1 + actProg * 2.5;
+          b.shockwaveRing.scale.setScalar(waveScale);
+          shockMat.opacity = Math.sin(actProg * Math.PI) * 0.75;
+        } else {
+          b.shockwaveRing.scale.setScalar(1);
+          shockMat.opacity = 0;
+        }
+
+        b.sparkGroup.visible = !lockedForStudent;
+        if (!lockedForStudent) {
+          b.sparkGroup.children.forEach((sp, sIdx) => {
+            const spData = sp.userData as { angle: number; baseY: number; speed: number };
+            const mult = isActivating ? 3.8 : isHighlighted ? 1.7 : 1.0;
+            spData.angle += dt * spData.speed * mult;
+            const orbitR = isActivating ? 2.2 - actProg * 0.5 : 2.1;
+            sp.position.x = Math.cos(spData.angle) * orbitR;
+            sp.position.z = Math.sin(spData.angle) * orbitR;
+            sp.position.y =
+              spData.baseY +
+              (isActivating ? actProg * 2.4 : Math.sin(elapsed * 3.2 + sIdx) * 0.25);
+            sp.rotation.y += dt * 4;
+            sp.scale.setScalar(isActivating ? 1.45 : isHighlighted ? 1.15 : 0.9);
+          });
         }
       });
 
       // Camera Choreography (Smooth damping; pauses when user manually drags OrbitControls)
       if (!curUser) {
-        // Login Backdrop: gentle scenic orbit around EcoWorld Island
+        // Login Backdrop: gentle scenic isometric orbit around Floating EcoWorld Island
         const angle = elapsed * 0.14;
-        camera.position.set(Math.cos(angle) * 38, 22, Math.sin(angle) * 38);
+        camera.position.set(Math.cos(angle) * 40, 24, Math.sin(angle) * 40);
         controls.target.set(0, 2, 0);
       } else if (!userOrbitingRef.current) {
-        if (curCamMode === 'firstPerson') {
+        if (portalAnimRef.current) {
+          // Dramatic cinematic close-up zoom as portal ignites
+          const ps = portalAnimRef.current;
+          const p = Math.min(1, ps.elapsed / ps.duration);
+          const dx = ps.startX - ps.portalCenterX;
+          const dz = ps.startZ - ps.portalCenterZ;
+          const dLen = Math.hypot(dx, dz) || 1;
+          const zoomDist = THREE.MathUtils.lerp(13.5, 8.8, p);
+          _desiredTarget.set(
+            THREE.MathUtils.lerp(agentRig.group.position.x, ps.portalCenterX, 0.55),
+            2.1,
+            THREE.MathUtils.lerp(agentRig.group.position.z, ps.portalCenterZ, 0.55)
+          );
+          _desiredCamPos.set(
+            ps.portalCenterX + (dx / dLen) * zoomDist + 3.2,
+            THREE.MathUtils.lerp(10.0, 6.2, p),
+            ps.portalCenterZ + (dz / dLen) * zoomDist + 3.8
+          );
+        } else if (curCamMode === 'firstPerson') {
           controls.minDistance = 0.5;
           controls.maxDistance = 12;
           controls.maxPolarAngle = Math.PI * 0.82;
           const rotY = agentRig.group.rotation.y;
           const ax = agentRig.group.position.x;
-          const ay = agentRig.group.position.y;
+          const ay = agentRig.bodyRoot.position.y;
           const az = agentRig.group.position.z;
-          _desiredCamPos.set(ax + Math.sin(rotY) * 0.25, 1.96 + ay, az + Math.cos(rotY) * 0.25);
-          _desiredTarget.set(ax + Math.sin(rotY) * 7.0, 1.78 + ay, az + Math.cos(rotY) * 7.0);
-        } else if (curCamMode === 'follow') {
+          _desiredCamPos.set(ax + Math.sin(rotY) * 0.25, 1.86 + ay, az + Math.cos(rotY) * 0.25);
+          _desiredTarget.set(ax + Math.sin(rotY) * 7.0, 1.7 + ay, az + Math.cos(rotY) * 7.0);
+        } else if (curCamMode === 'follow' || pendingArrivalMissionIdRef.current !== null) {
           _desiredTarget.set(
             agentRig.group.position.x,
             1.6,
@@ -781,8 +1198,8 @@ export function EcoWorldCanvas({
           );
           _desiredCamPos.set(
             agentRig.group.position.x,
-            12.5,
-            agentRig.group.position.z + 17
+            12.0,
+            agentRig.group.position.z + 16.5
           );
         } else if (curCamMode === 'zone') {
           const zm = curMissions.find((m) => m.id === curFocusId) || curMissions[0];
@@ -790,13 +1207,13 @@ export function EcoWorldCanvas({
           _desiredTarget.set(zx, 2.0, zz);
           _desiredCamPos.set(zx + (zx >= 0 ? 11 : -11), 13.5, zz + 16);
         } else {
-          // Overview
+          // Isometric Adventure Overview
           _desiredTarget.set(0, 1.5, 0);
-          _desiredCamPos.set(0, 27, 40);
+          _desiredCamPos.set(0, 26, 42);
         }
 
-        const camDamp = curCamMode === 'firstPerson' ? 12.0 : 4.2;
-        const tgtDamp = curCamMode === 'firstPerson' ? 14.0 : 5.0;
+        const camDamp = portalAnimRef.current ? 6.5 : curCamMode === 'firstPerson' ? 12.0 : 4.2;
+        const tgtDamp = portalAnimRef.current ? 7.5 : curCamMode === 'firstPerson' ? 14.0 : 5.0;
         camera.position.x = THREE.MathUtils.damp(camera.position.x, _desiredCamPos.x, camDamp, dt);
         camera.position.y = THREE.MathUtils.damp(camera.position.y, _desiredCamPos.y, camDamp, dt);
         camera.position.z = THREE.MathUtils.damp(camera.position.z, _desiredCamPos.z, camDamp, dt);
@@ -857,7 +1274,7 @@ export function EcoWorldCanvas({
   return (
     <div
       ref={mountRef}
-      className="fixed inset-0 z-0 w-full h-full select-none"
+      className={`fixed inset-0 z-0 w-full h-full select-none ${paused ? 'hidden' : ''}`}
       aria-label="Dunia 3D Interaktif EcoWorld"
     />
   );

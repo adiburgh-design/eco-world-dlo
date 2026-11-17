@@ -1,10 +1,60 @@
-import React, { useState } from 'react';
-import { CheckCircle2, Download, Printer, Shield, Sparkles, X, Zap } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import {
+  CheckCircle2,
+  Download,
+  MessageCircle,
+  Printer,
+  Shield,
+  Sparkles,
+  Volume2,
+  X,
+  Zap,
+} from 'lucide-react';
 import { AVATARS, BADGES_DEF } from '../data/gameData';
 import { AvatarId, MissionDef, UserAccount } from '../types/game';
 import { downloadCertificatePdf } from '../utils/certificatePdf';
-import { playSFX } from '../utils/sound';
+import { playSFX, setMusicState } from '../utils/sound';
 import { calcLevel, calcOverallScore, computeAIGuide } from '../utils/storage';
+import { Agent3DStage } from './Agent3DStage';
+
+function speakAgentGreeting(avatarId: AvatarId, text: string): void {
+  if (typeof window === 'undefined' || !('speechSynthesis' in window) || !text) return;
+  try {
+    window.speechSynthesis.cancel();
+    const utter = new SpeechSynthesisUtterance(text);
+    const voices = window.speechSynthesis.getVoices();
+    const isFemale = avatarId === 'tirta' || avatarId === 'suara';
+    const msVoice =
+      voices.find((v) => v.lang.toLowerCase().startsWith('ms')) ||
+      voices.find((v) => v.lang.toLowerCase().startsWith('id'));
+    if (msVoice) {
+      utter.voice = msVoice;
+      utter.lang = msVoice.lang;
+    } else {
+      utter.lang = 'ms-MY';
+    }
+    utter.pitch = isFemale ? 1.18 : 0.92;
+    utter.rate = 0.98;
+    utter.onstart = () => setMusicState({ ducked: true });
+    utter.onend = () => setMusicState({ ducked: false });
+    utter.onerror = () => setMusicState({ ducked: false });
+    setMusicState({ ducked: true });
+    window.speechSynthesis.speak(utter);
+  } catch {
+    setMusicState({ ducked: false });
+  }
+}
+
+function stopAgentGreeting(): void {
+  if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+    try {
+      window.speechSynthesis.cancel();
+    } catch {
+      // ignore
+    }
+  }
+  setMusicState({ ducked: false });
+}
 
 export function EvidenceBookModal({
   user,
@@ -19,12 +69,12 @@ export function EvidenceBookModal({
       <div className="w-full max-w-xl bg-slate-950 border border-sky-500/50 rounded-3xl p-6 text-slate-100 shadow-2xl">
         <div className="flex items-center justify-between mb-4">
           <h2 className="font-display text-2xl font-bold text-sky-300">
-            📖 Evidence Book · {user.fullName}
+            📖 Buku Bukti · {user.fullName}
           </h2>
           <button
             type="button"
             onClick={onClose}
-            className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 cursor-pointer"
+            className="btn-game-slate btn-game-sm p-2 rounded-xl text-slate-200 cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
@@ -87,6 +137,15 @@ export function ProfileBadgesModal({
   const ai = computeAIGuide(user);
   const p = user.progress!;
   const currentAv = AVATARS.find((a) => a.id === user.avatar) || AVATARS[0];
+  const [hoveredAv, setHoveredAv] = useState<AvatarId | null>(null);
+  const [burstKey, setBurstKey] = useState(0);
+  const [showBubble, setShowBubble] = useState(true);
+
+  useEffect(() => {
+    return () => {
+      stopAgentGreeting();
+    };
+  }, []);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 p-4">
@@ -116,34 +175,67 @@ export function ProfileBadgesModal({
           <button
             type="button"
             onClick={onClose}
-            className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 cursor-pointer"
+            className="btn-game-slate btn-game-sm p-2 rounded-xl text-slate-200 cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        {/* 3D Avatar Selector */}
-        <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
-          <div className="text-xs font-bold text-slate-300 mb-2.5">
+        {/* 3D Avatar Selector with Live Interactive 3D Human Preview */}
+        <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 space-y-3">
+          <div className="text-xs font-bold text-slate-300">
             Pilih Karakter Ejen 3D Anda (Berubah terus di Pulau 3D)
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-            {AVATARS.map((av) => (
-              <button
-                key={av.id}
-                type="button"
-                onClick={() => onChangeAvatar(av.id)}
-                className={`p-3 rounded-xl border text-left transition-colors cursor-pointer ${
-                  user.avatar === av.id
-                    ? 'bg-emerald-950/70 border-emerald-400 text-white'
-                    : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-600'
-                }`}
-              >
-                <div className="text-2xl mb-1">{av.emoji}</div>
-                <div className="font-display font-bold text-xs">{av.name}</div>
-                <div className="text-[11px] opacity-80">{av.tagline}</div>
-              </button>
-            ))}
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-3.5 items-center">
+            <div className="md:col-span-5 relative h-52 rounded-2xl overflow-hidden border border-slate-700 bg-slate-950">
+              <Agent3DStage
+                mode="single"
+                selectedId={currentAv.id}
+                hoveredId={hoveredAv}
+                welcomeBurstKey={burstKey}
+                onHoverAgent={setHoveredAv}
+                onSelectAgent={() => {
+                  playSFX('click');
+                  setBurstKey((k) => k + 1);
+                  setShowBubble(true);
+                  speakAgentGreeting(currentAv.id, currentAv.greeting || '');
+                }}
+              />
+              {showBubble && currentAv.greeting && (
+                <div className="pointer-events-none absolute bottom-2 inset-x-2 rounded-xl bg-slate-950/90 border border-emerald-400/60 px-2.5 py-1.5 text-[11px] text-slate-100 shadow-lg">
+                  <span className="font-bold text-amber-300">{currentAv.name}:</span>{' '}
+                  {currentAv.greeting}
+                </div>
+              )}
+            </div>
+            <div className="md:col-span-7 grid grid-cols-2 gap-2.5">
+              {AVATARS.map((av) => (
+                <button
+                  key={av.id}
+                  type="button"
+                  onMouseEnter={() => setHoveredAv(av.id)}
+                  onMouseLeave={() => setHoveredAv(null)}
+                  onClick={() => {
+                    onChangeAvatar(av.id);
+                    setBurstKey((k) => k + 1);
+                    setShowBubble(true);
+                    speakAgentGreeting(av.id, av.greeting || '');
+                  }}
+                  className={`btn-game-sm p-3 rounded-2xl text-left cursor-pointer ${
+                    user.avatar === av.id
+                      ? 'btn-game-emerald text-slate-950'
+                      : 'btn-game-slate text-slate-200'
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="btn-icon-3d w-9 h-9 text-xl">{av.emoji}</span>
+                    {user.avatar === av.id && <span className="text-xs font-black">⭐</span>}
+                  </div>
+                  <div className="font-display font-bold text-xs">{av.name}</div>
+                  <div className="text-[11px] opacity-85">{av.tagline}</div>
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
@@ -192,13 +284,18 @@ export function ProfileBadgesModal({
                     onClose();
                     onOpenMission(m.id);
                   }}
-                  className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 hover:border-sky-400 disabled:opacity-50 flex items-center justify-between text-xs text-left cursor-pointer"
+                  className={`btn-game-sm w-full p-2.5 rounded-xl disabled:opacity-50 flex items-center justify-between text-xs text-left cursor-pointer ${
+                    unlocked ? 'btn-game-cyan text-slate-950' : 'btn-game-slate text-slate-400'
+                  }`}
                 >
-                  <span>
-                    {m.icon} Misi {m.id}: {m.shortTitle}
+                  <span className="flex items-center gap-2 font-bold">
+                    <span className="btn-icon-3d w-6 h-6 text-xs">{m.icon}</span>
+                    <span>
+                      Misi {m.id}: {m.shortTitle}
+                    </span>
                   </span>
-                  <span className="font-mono-num font-bold text-emerald-400">
-                    {done ? `${scoreVal}%` : unlocked ? 'Sedia' : '🔒'}
+                  <span className="font-mono-num font-black">
+                    {done ? `⭐ ${scoreVal}%` : unlocked ? 'Sedia' : '🔒'}
                   </span>
                 </button>
               );
@@ -211,9 +308,9 @@ export function ProfileBadgesModal({
 
           <div className="p-4 rounded-2xl bg-slate-900 border border-purple-500/40 space-y-2.5">
             <h3 className="font-display font-bold text-purple-300 text-base">
-              🤖 AI Mission Guide
+              🤖 Panduan Pintar Misi
             </h3>
-            <div className="text-xs font-semibold text-sky-300">{ai.levelMode}</div>
+            <div className="text-xs font-semibold text-sky-300">Tahap: {ai.levelMode}</div>
             <div className="text-xs text-slate-200">
               <strong>Langkah Seterusnya:</strong>
               <p className="mt-1 text-slate-300">{ai.nextStep}</p>
@@ -268,15 +365,15 @@ export function HallOfHeroesModal({
           <div className="p-3 rounded-2xl bg-slate-900 text-white">
             <div className="text-xs text-slate-400">Tahap</div>
             <div className="font-mono-num text-xl font-bold text-emerald-400">
-              Lv.{calcLevel(xp)}
+              Tahap {calcLevel(xp)}
             </div>
           </div>
           <div className="p-3 rounded-2xl bg-slate-900 text-white">
-            <div className="text-xs text-slate-400">Purata Skor</div>
+            <div className="text-xs text-slate-400">Purata Markah</div>
             <div className="font-mono-num text-xl font-bold text-sky-400">{ov}%</div>
           </div>
           <div className="p-3 rounded-2xl bg-slate-900 text-white">
-            <div className="text-xs text-slate-400">Projek PBL</div>
+            <div className="text-xs text-slate-400">Projek Kempen</div>
             <div className="text-sm font-bold pt-1 text-emerald-300">
               {user.progress?.m5.submitted ? 'Selesai' : 'Dalam Proses'}
             </div>
@@ -305,21 +402,27 @@ export function HallOfHeroesModal({
               playSFX('xp');
               downloadCertificatePdf(user);
             }}
-            className="btn-game-emerald px-5 py-2.5 rounded-xl text-slate-950 font-game font-black text-sm flex items-center gap-2 cursor-pointer"
+            className="btn-game-emerald px-5 py-2.5 rounded-2xl text-slate-950 font-game font-black text-sm flex items-center gap-2 cursor-pointer"
           >
-            <Download className="w-4 h-4" /> Muat Turun Sijil PDF Sebenar
+            <span className="btn-icon-3d w-6 h-6">
+              <Download className="w-3.5 h-3.5" />
+            </span>
+            <span>Muat Turun Sijil PDF Sebenar</span>
           </button>
           <button
             type="button"
             onClick={() => window.print()}
-            className="px-5 py-2.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-display font-bold text-sm flex items-center gap-2 cursor-pointer"
+            className="btn-game-gold px-5 py-2.5 rounded-2xl text-slate-950 font-display font-bold text-sm flex items-center gap-2 cursor-pointer"
           >
-            <Printer className="w-4 h-4" /> Cetak Sijil
+            <span className="btn-icon-3d w-6 h-6">
+              <Printer className="w-3.5 h-3.5" />
+            </span>
+            <span>Cetak Sijil</span>
           </button>
           <button
             type="button"
             onClick={onClose}
-            className="px-5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-display font-bold text-sm cursor-pointer"
+            className="btn-game-slate px-5 py-2.5 rounded-2xl text-white font-display font-bold text-sm cursor-pointer"
           >
             Tutup
           </button>
@@ -335,12 +438,12 @@ export function WheretoModal({ onClose }: { onClose: () => void }) {
       <div className="w-full max-w-xl bg-slate-950 border border-emerald-500/40 rounded-3xl p-6 text-slate-100 shadow-2xl">
         <div className="flex items-center justify-between mb-3">
           <h2 className="font-display text-xl font-bold text-emerald-400">
-            📘 Panduan Kurikulum & WHERETO
+            📘 Panduan Pembelajaran Misi
           </h2>
           <button
             type="button"
             onClick={onClose}
-            className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 cursor-pointer"
+            className="btn-game-slate btn-game-sm p-2 rounded-xl text-slate-200 cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
@@ -350,13 +453,13 @@ export function WheretoModal({ onClose }: { onClose: () => void }) {
           sesuatu perkara menggunakan idea kritis & kreatif berdasarkan maklumat tersurat dan tersirat.
         </p>
         <div className="space-y-2 text-xs bg-slate-900 border border-slate-800 rounded-2xl p-4 text-slate-300">
-          <div><strong className="text-amber-300">W:</strong> Hala tuju Kempen Digital Selamatkan EcoWorld.</div>
-          <div><strong className="text-amber-300">H:</strong> Penerokaan Pulau 3D, bukti sungai & audio Puan Aminah.</div>
-          <div><strong className="text-amber-300">E (Equip):</strong> 5 misi berperingkat + pembina hujah & rakaman suara.</div>
-          <div><strong className="text-amber-300">R (Rethink):</strong> Semakan kendiri, rakan sebaya & maklum balas guru.</div>
-          <div><strong className="text-amber-300">E (Evaluate):</strong> Markah automatik, lencana pencapaian & rubrik PBL.</div>
-          <div><strong className="text-amber-300">T (Tailor):</strong> AI Mission Guide mencadangkan pengukuhan/pengayaan.</div>
-          <div><strong className="text-amber-300">O (Organize):</strong> Dunia 3D berperingkat hingga Hall of Heroes.</div>
+          <div><strong className="text-amber-300">1. Hala Tuju (W):</strong> Matlamat Kempen Digital Selamatkan EcoWorld.</div>
+          <div><strong className="text-amber-300">2. Tarikan (H):</strong> Penerokaan Pulau 3D, bukti sungai & audio Puan Aminah.</div>
+          <div><strong className="text-amber-300">3. Lengkapkan (E):</strong> 5 misi berperingkat, bina hujah & rakaman suara.</div>
+          <div><strong className="text-amber-300">4. Fikir Semula (R):</strong> Semakan kendiri, rakan sebaya & maklum balas guru.</div>
+          <div><strong className="text-amber-300">5. Penilaian (E):</strong> Markah automatik, lencana pencapaian & projek kempen.</div>
+          <div><strong className="text-amber-300">6. Bimbingan (T):</strong> Panduan Pintar mencadangkan latihan pengukuhan atau pengayaan.</div>
+          <div><strong className="text-amber-300">7. Susunan (O):</strong> Kembara pulau 3D berperingkat hingga Dewan Wira.</div>
         </div>
       </div>
     </div>
@@ -370,57 +473,153 @@ export function AgentSelectModal({
   user: UserAccount;
   onSelectAgent: (avatarId: AvatarId) => void;
 }) {
-  const [selected, setSelected] = useState<AvatarId>(user.avatar || 'rimba');
+  const [selected, setSelected] = useState<AvatarId>(user.avatar || 'tirta');
+  const [hovered, setHovered] = useState<AvatarId | null>(null);
+  const [burstKey, setBurstKey] = useState(1);
+  const [introSpeaker, setIntroSpeaker] = useState<AvatarId>(user.avatar || 'tirta');
+
+  const speakerAv = AVATARS.find((a) => a.id === introSpeaker) || AVATARS[0];
+
+  useEffect(() => {
+    return () => {
+      stopAgentGreeting();
+    };
+  }, []);
+
+  const handleTriggerAgent = (id: AvatarId) => {
+    playSFX('click');
+    setSelected(id);
+    setIntroSpeaker(id);
+    setBurstKey((k) => k + 1);
+    const av = AVATARS.find((a) => a.id === id);
+    if (av?.greeting) {
+      speakAgentGreeting(id, av.greeting);
+    }
+  };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/85 p-4 overflow-y-auto">
-      <div className="w-full max-w-3xl bg-slate-950 border-2 border-emerald-400/75 rounded-3xl p-6 sm:p-8 text-slate-100 shadow-2xl space-y-6">
-        <div className="text-center space-y-1.5">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/88 p-3 sm:p-4 overflow-y-auto">
+      <div className="w-full max-w-5xl max-h-[94vh] overflow-y-auto eco-scroll bg-slate-950 border-2 border-emerald-400/75 rounded-3xl p-4 sm:p-6 text-slate-100 shadow-2xl space-y-4">
+        <div className="text-center space-y-1">
           <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-emerald-950/80 border border-emerald-400/50 text-emerald-300 font-game text-xs font-bold">
             <Shield className="w-3.5 h-3.5" /> PENDAFTARAN WATAK EJEN 3D
           </div>
           <h2 className="game-title-emerald text-2xl sm:text-3xl font-black uppercase">
             PILIH EJEN ECOWORLD ANDA
           </h2>
-          <p className="text-xs sm:text-sm text-slate-300 max-w-xl mx-auto">
-            Selamat datang <strong className="text-amber-300">{user.fullName}</strong>! Pilih ejen pilihan anda sebelum memulakan misi menyelamatkan EcoWorld.
+          <p className="text-xs sm:text-sm text-slate-300 max-w-2xl mx-auto">
+            Selamat datang <strong className="text-amber-300">{user.fullName}</strong>! Klik atau gerakkan kursor pada mana-mana Ejen 3D di pentas untuk berkenalan sebelum memulakan misi.
           </p>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+        {/* Live 3D Guardians Stage showing all 4 separate animated 3D human characters */}
+        <div className="relative rounded-2xl border-2 border-sky-400/50 bg-slate-900 overflow-hidden shadow-2xl">
+          <div className="h-[220px] sm:h-[270px] md:h-[300px] w-full">
+            <Agent3DStage
+              mode="lineup"
+              selectedId={selected}
+              hoveredId={hovered}
+              welcomeBurstKey={burstKey}
+              onHoverAgent={setHovered}
+              onSelectAgent={handleTriggerAgent}
+            />
+          </div>
+
+          {/* Interactive Speech Bubble Introduction */}
+          <div className="px-3 sm:px-5 py-2.5 bg-slate-950/95 border-t border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+            <div className="flex items-start sm:items-center gap-2.5 min-w-0">
+              <div
+                className="w-9 h-9 rounded-xl flex items-center justify-center text-xl shrink-0 border"
+                style={{
+                  backgroundColor: `${speakerAv.primaryColor}30`,
+                  borderColor: speakerAv.accentColor,
+                }}
+              >
+                {speakerAv.emoji}
+              </div>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <span className="font-game font-black text-amber-300 flex items-center gap-1">
+                    <MessageCircle className="w-3.5 h-3.5 text-sky-400" />
+                    {speakerAv.name}
+                  </span>
+                  {speakerAv.roleTitle && (
+                    <span className="px-2 py-0.5 rounded-md bg-slate-800 text-[10px] font-bold text-sky-300">
+                      {speakerAv.roleTitle}
+                    </span>
+                  )}
+                  {speakerAv.personality && (
+                    <span className="text-[11px] text-emerald-300 font-semibold">
+                      · {speakerAv.personality}
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs sm:text-sm text-slate-100 font-medium mt-0.5">
+                  &ldquo;{speakerAv.greeting}&rdquo;
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => speakAgentGreeting(speakerAv.id, speakerAv.greeting || '')}
+              className="btn-game-teal btn-game-sm px-2.5 py-1 text-[11px] font-game font-black text-slate-950 flex items-center gap-1 cursor-pointer shrink-0"
+              title="Dengar ucapan ejen"
+            >
+              <Volume2 className="w-3.5 h-3.5" /> Dengar Suara
+            </button>
+          </div>
+        </div>
+
+        {/* 4 Separate Individual Guardian Cards (Desktop 4-col, Tablet 2-col, Mobile 1-col) */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           {AVATARS.map((av) => {
             const active = selected === av.id;
             return (
               <button
                 key={av.id}
                 type="button"
-                onClick={() => {
-                  playSFX('click');
-                  setSelected(av.id);
-                }}
-                className={`p-4 rounded-2xl border-2 text-left transition-all cursor-pointer flex items-center gap-4 ${
+                onMouseEnter={() => setHovered(av.id)}
+                onMouseLeave={() => setHovered(null)}
+                onClick={() => handleTriggerAgent(av.id)}
+                className={`p-3.5 rounded-2xl text-left cursor-pointer flex flex-col gap-2 ${
                   active
-                    ? 'bg-emerald-950/75 border-amber-400 shadow-lg scale-[1.01]'
-                    : 'bg-slate-900 border-slate-800 hover:border-emerald-500/60'
+                    ? 'btn-game-emerald text-slate-950 scale-[1.01]'
+                    : 'btn-game-slate text-slate-100'
                 }`}
               >
-                <div
-                  className="w-16 h-16 rounded-2xl flex items-center justify-center text-4xl shrink-0 border-2"
-                  style={{
-                    backgroundColor: `${av.primaryColor}25`,
-                    borderColor: active ? '#facc15' : av.primaryColor,
-                  }}
-                >
-                  {av.emoji}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-game text-base font-black text-white">{av.name}</span>
-                    {active && <CheckCircle2 className="w-5 h-5 text-amber-400 shrink-0" />}
+                <div className="flex items-center justify-between gap-2">
+                  <div
+                    className="btn-icon-3d w-11 h-11 rounded-xl flex items-center justify-center text-2xl shrink-0"
+                    style={{
+                      backgroundColor: active ? 'rgba(255,255,255,0.28)' : `${av.primaryColor}35`,
+                      border: active ? '2px solid #facc15' : `2px solid ${av.primaryColor}`,
+                    }}
+                  >
+                    {av.emoji}
                   </div>
-                  <div className="text-xs text-emerald-300 font-semibold mt-0.5">{av.tagline}</div>
-                  <div className="text-[11px] text-slate-400 mt-1">
-                    Suit {av.primaryColor === '#16a34a' ? 'Hijau Rimba' : av.primaryColor === '#0284c7' ? 'Biru Laut' : av.primaryColor === '#0d9488' ? 'Turquoise Bayu' : 'Emas Suara'} · Visor Aktif 3D
+                  {active ? (
+                    <CheckCircle2 className="w-5 h-5 text-slate-950 shrink-0" />
+                  ) : (
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      {av.roleTitle}
+                    </span>
+                  )}
+                </div>
+                <div>
+                  <div className="font-game text-sm font-black">{av.name}</div>
+                  <div
+                    className={`text-xs font-bold mt-0.5 ${
+                      active ? 'text-emerald-950' : 'text-emerald-300'
+                    }`}
+                  >
+                    {av.tagline}
+                  </div>
+                  <div
+                    className={`text-[11px] mt-1 font-medium leading-snug ${
+                      active ? 'text-slate-900' : 'text-slate-400'
+                    }`}
+                  >
+                    {av.suitLabel}
                   </div>
                 </div>
               </button>
@@ -432,12 +631,15 @@ export function AgentSelectModal({
           <button
             type="button"
             onClick={() => {
-              playSFX('portal');
+              stopAgentGreeting();
               onSelectAgent(selected);
             }}
-            className="btn-game-emerald px-8 py-3.5 rounded-2xl text-slate-950 font-game font-black text-sm sm:text-base tracking-wider uppercase flex items-center gap-2 cursor-pointer"
+            className="btn-game-emerald px-8 py-3.5 rounded-2xl text-slate-950 font-game font-black text-sm sm:text-base tracking-wider uppercase flex items-center gap-2.5 cursor-pointer"
           >
-            <Sparkles className="w-4 h-4" /> SAHKAN EJEN & MULA MISI →
+            <span className="btn-icon-3d w-7 h-7">
+              <Sparkles className="w-4 h-4" />
+            </span>
+            <span>SAHKAN EJEN & MULA MISI →</span>
           </button>
         </div>
       </div>
@@ -478,7 +680,7 @@ export function MissionSuccessModal({
             Markah: {info.score}% · Ganjaran: +{info.xpEarned} XP
           </div>
           <div className="text-xs text-emerald-300 font-semibold flex items-center justify-center gap-1.5">
-            <CheckCircle2 className="w-3.5 h-3.5" /> Rekod anda telah dicatat ke Dashboard Guru!
+            <CheckCircle2 className="w-3.5 h-3.5" /> Rekod anda telah disimpan ke Papan Guru!
           </div>
         </div>
 
@@ -489,9 +691,16 @@ export function MissionSuccessModal({
             <button
               type="button"
               onClick={onTeleportNext}
-              className="btn-game-emerald w-full sm:w-auto px-5 py-2.5 rounded-xl text-slate-950 font-game font-black text-xs sm:text-sm flex items-center justify-center gap-2 cursor-pointer"
+              className="btn-game-emerald w-full sm:w-auto px-5 py-2.5 rounded-2xl text-slate-950 font-game font-black text-xs sm:text-sm flex items-center justify-center gap-2 cursor-pointer"
             >
-              <Zap className="w-4 h-4" /> TELEPORT KE MISI 0{nextMission.id}
+              <span className="btn-icon-3d w-6 h-6">
+                <Zap className="w-3.5 h-3.5" />
+              </span>
+              <span>
+                {info.missionId === 1
+                  ? 'TERUSKAN KE MISI 2'
+                  : `TELEPORTASI KE MISI 0${nextMission.id}`}
+              </span>
             </button>
           )}
           <button
@@ -500,23 +709,28 @@ export function MissionSuccessModal({
               playSFX('xp');
               downloadCertificatePdf(user);
             }}
-            className="btn-game-gold px-5 py-2.5 rounded-xl text-slate-950 font-game font-black text-xs sm:text-sm flex items-center gap-2 cursor-pointer"
+            className="btn-game-gold px-5 py-2.5 rounded-2xl text-slate-950 font-game font-black text-xs sm:text-sm flex items-center gap-2 cursor-pointer"
           >
-            <Download className="w-4 h-4" /> Muat Turun Sijil PDF
+            <span className="btn-icon-3d w-6 h-6">
+              <Download className="w-3.5 h-3.5" />
+            </span>
+            <span>Muat Turun Sijil PDF</span>
           </button>
           <button
             type="button"
             onClick={onOpenHeroes}
-            className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-amber-400/60 text-amber-200 font-display font-bold text-xs sm:text-sm cursor-pointer"
+            className="btn-game-cyan btn-game-sm px-4 py-2.5 rounded-2xl text-slate-950 font-display font-bold text-xs sm:text-sm flex items-center gap-1.5 cursor-pointer"
           >
-            Lihat Sijil Penuh
+            <span>🏆</span>
+            <span>Lihat Sijil Penuh</span>
           </button>
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 font-display font-bold text-xs sm:text-sm cursor-pointer"
+            className="btn-game-slate btn-game-sm px-4 py-2.5 rounded-2xl text-slate-100 font-display font-bold text-xs sm:text-sm flex items-center gap-1.5 cursor-pointer"
           >
-            Teroka Pulau 3D
+            <span>🗺️</span>
+            <span>Kembali ke Peta</span>
           </button>
         </div>
       </div>

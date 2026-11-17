@@ -39,7 +39,7 @@ export function downloadCertificatePdf(user: UserAccount): void {
   doc.setTextColor(250, 204, 21);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(22);
-  doc.text('SIJIL PENGIKTIRAFAN ECOWORLD MISSION CONTROL', W / 2, 30, { align: 'center' });
+  doc.text('SIJIL PENGIKTIRAFAN KAWALAN MISI ECOWORLD', W / 2, 30, { align: 'center' });
 
   doc.setTextColor(167, 243, 208);
   doc.setFontSize(10.5);
@@ -103,7 +103,7 @@ export function downloadCertificatePdf(user: UserAccount): void {
     { label: 'JUMLAH XP', value: `${xp} XP` },
     { label: 'TAHAP EJEN', value: `Tahap ${lvl}` },
     { label: 'PURATA SKOR', value: `${overall}%` },
-    { label: 'STATUS PBL', value: p?.m5.submitted ? 'LENGKAP' : 'AKTIF' },
+    { label: 'STATUS PROJEK', value: p?.m5.submitted ? 'LENGKAP' : 'AKTIF' },
   ];
 
   metrics.forEach((m, idx) => {
@@ -180,7 +180,7 @@ export function downloadCertificatePdf(user: UserAccount): void {
   doc.setFontSize(9);
   doc.setTextColor(71, 85, 105);
   doc.text(`Tarikh Dikeluarkan: ${todayStr}`, 70, 193, { align: 'center' });
-  doc.text('Penyelaras EcoWorld Mission Control (BM Tahun 6)', W - 70, 193, { align: 'center' });
+  doc.text('Penyelaras Kawalan Misi EcoWorld (BM Tahun 6)', W - 70, 193, { align: 'center' });
 
   const safeName = user.fullName.toLowerCase().replace(/[^a-z0-9]+/g, '-');
   doc.save(`Sijil-EcoWorld-${safeName}.pdf`);

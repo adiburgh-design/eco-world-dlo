@@ -15,6 +15,7 @@ import {
 import { M1_CLUES_3D, M1_SCRIPT, M2_SCENES, M3_OPTS, PBL_STEPS } from '../data/gameData';
 import { Clue3D, MissionDef, UserAccount } from '../types/game';
 import { playSFX, setMusicState } from '../utils/sound';
+import { Mission5RecordingPanel } from './Mission5RecordingPanel';
 
 interface MissionDrawerProps {
   mission: MissionDef;
@@ -35,6 +36,12 @@ interface MissionDrawerProps {
     hasRecording: boolean,
     peerFeedback: string
   ) => void;
+  onUpdateMission4Argument?: (argument: {
+    pendirian: string;
+    bukti: string;
+    huraian: string;
+    kesimpulan: string;
+  }) => void;
   onCompleteMission5: (
     title: string,
     link: string,
@@ -56,51 +63,51 @@ interface RoomMeta {
 
 const ROOM_META: Record<number, RoomMeta> = {
   1: {
-    gameTitle: 'MISSION 01: ZON SUNGAI TERCEMAR',
+    gameTitle: 'MISI 01: ZON SUNGAI TERCEMAR',
     subtitle: 'OPERASI MENCARI BUKTI',
     objective:
       'Dengar laporan penduduk dengan teliti dan kenal pasti maklumat penting termasuk maklumat tersurat dan tersirat.',
-    startLabel: 'START INVESTIGATION',
+    startLabel: 'MULA MENYIASAT',
     accentBorder: 'border-emerald-400/70',
     titleClass: 'game-title-emerald',
     btnClass: 'btn-game-emerald text-slate-950',
   },
   2: {
-    gameTitle: 'MISSION 02: BANDAR UDARA BERACUN',
+    gameTitle: 'MISI 02: BANDAR UDARA BERACUN',
     subtitle: 'OPERASI ANALISIS PENCEMARAN',
     objective:
       'Analisis punca dan kesan pencemaran udara berdasarkan bahan audio dan visual serta jawab soalan pemikiran kritis.',
-    startLabel: 'START ANALYSIS',
+    startLabel: 'MULA MENGANALISIS',
     accentBorder: 'border-teal-400/70',
     titleClass: 'game-title-gold',
     btnClass: 'btn-game-cyan text-slate-950',
   },
   3: {
-    gameTitle: 'MISSION 03: HUTAN HARAPAN',
+    gameTitle: 'MISI 03: HUTAN HARAPAN',
     subtitle: 'OPERASI PENYELAMATAN ALAM',
     objective:
       'Nilaikan cadangan penyelesaian masalah pencemaran dengan mengambil kira kelebihan dan cabarannya secara kritis.',
-    startLabel: 'START CHALLENGE',
+    startLabel: 'MULA CABARAN',
     accentBorder: 'border-emerald-400/75',
     titleClass: 'game-title-emerald',
     btnClass: 'btn-game-emerald text-slate-950',
   },
   4: {
-    gameTitle: 'MISSION 04: MAKMAL SUARA',
+    gameTitle: 'MISI 04: MAKMAL SUARA',
     subtitle: 'OPERASI BINA HUJAH',
     objective:
       'Bina hujah yang jelas dan berkeyakinan berdasarkan bukti serta latih penyampaian lisan dengan intonasi yang tepat.',
-    startLabel: 'START SPEAKING',
+    startLabel: 'MULA BERTUTUR',
     accentBorder: 'border-sky-400/75',
     titleClass: 'game-title-gold',
     btnClass: 'btn-game-gold text-slate-950',
   },
   5: {
-    gameTitle: 'MISSION 05: OPERASI SELAMATKAN ECOWORLD',
-    subtitle: 'FINAL MISSION – SUARAKAN PERUBAHAN!',
+    gameTitle: 'MISI 05: OPERASI SELAMATKAN ECOWORLD',
+    subtitle: 'MISI AKHIR – SUARAKAN PERUBAHAN!',
     objective:
       'KEMPEN DIGITAL: SELAMATKAN ECOWORLD! — "Bagaimanakah kita boleh meyakinkan masyarakat untuk mengambil tindakan terhadap masalah alam sekitar?"',
-    startLabel: 'START FINAL MISSION',
+    startLabel: 'MULA MISI AKHIR',
     accentBorder: 'border-amber-400/80',
     titleClass: 'game-title-gold',
     btnClass: 'btn-game-gold text-slate-950',
@@ -155,6 +162,7 @@ export function MissionDrawer({
   onCompleteMission2,
   onCompleteMission3,
   onCompleteMission4,
+  onUpdateMission4Argument,
   onCompleteMission5,
 }: MissionDrawerProps) {
   const p = user.progress!;
@@ -206,6 +214,17 @@ export function MissionDrawer({
   const [m5Score, setM5Score] = useState<number>(p.m5.rubricScore || 85);
   const [m5Refl, setM5Refl] = useState(p.m5.reflection || '');
 
+  // Misi 5 Area 2 (Hujah dari Makmal Suara) inline edit state
+  const [m5EditingArg, setM5EditingArg] = useState(false);
+  const [m5ArgDraft, setM5ArgDraft] = useState({
+    pendirian: p.m4.argument?.pendirian || '',
+    bukti: p.m4.argument?.bukti || '',
+    huraian: p.m4.argument?.huraian || '',
+    kesimpulan: p.m4.argument?.kesimpulan || '',
+  });
+  const [m5ArgError, setM5ArgError] = useState<string | null>(null);
+  const [m5ArgSavedBanner, setM5ArgSavedBanner] = useState(false);
+
   // Wrong answer feedback with red X cross icon and retry explanation
   const [wrongFeedback, setWrongFeedback] = useState<{
     summary: string;
@@ -226,7 +245,25 @@ export function MissionDrawer({
     setPhase('briefing');
     setM5Area(1);
     setWrongFeedback(null);
-  }, [mission.id]);
+    setM5EditingArg(false);
+    setM5ArgError(null);
+    setM5ArgSavedBanner(false);
+  }, [mission.id, user.id]);
+
+  useEffect(() => {
+    setM5ArgDraft({
+      pendirian: p.m4.argument?.pendirian || '',
+      bukti: p.m4.argument?.bukti || '',
+      huraian: p.m4.argument?.huraian || '',
+      kesimpulan: p.m4.argument?.kesimpulan || '',
+    });
+  }, [
+    user.id,
+    p.m4.argument?.pendirian,
+    p.m4.argument?.bukti,
+    p.m4.argument?.huraian,
+    p.m4.argument?.kesimpulan,
+  ]);
 
   useEffect(() => {
     if (!('speechSynthesis' in window)) return;
@@ -533,7 +570,7 @@ export function MissionDrawer({
         type="button"
         onClick={onToggleMusic}
         className="text-xs font-bold text-emerald-300 hover:text-white flex items-center gap-1 cursor-pointer"
-        title="Muzik Latar ON/OFF"
+        title="Muzik Latar Buka/Tutup"
       >
         {musicOn ? <Music className="w-3.5 h-3.5 text-emerald-400" /> : <VolumeX className="w-3.5 h-3.5 text-slate-400" />}
         <span className="hidden sm:inline">{musicOn ? 'Muzik' : 'Senyap'}</span>
@@ -570,7 +607,7 @@ export function MissionDrawer({
               playSFX('click');
               setPhase('activity');
             }}
-            className={`px-4 py-2 rounded-xl font-game text-xs font-black cursor-pointer ${meta.btnClass}`}
+            className={`px-4 py-2 font-game text-xs font-black cursor-pointer ${meta.btnClass}`}
           >
             BUKA PANEL MISI
           </button>
@@ -581,9 +618,9 @@ export function MissionDrawer({
               playSFX('click');
               onClose();
             }}
-            className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-amber-400/70 text-amber-200 font-game text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-lg"
+            className="btn-game-gold btn-game-sm px-4 py-2 text-slate-950 font-game text-xs font-black flex items-center gap-1.5 cursor-pointer"
           >
-            <ArrowLeft className="w-3.5 h-3.5" /> RETURN TO MISSION MAP
+            <ArrowLeft className="w-3.5 h-3.5" /> KEMBALI KE PETA MISI
           </button>
         </div>
       </div>
@@ -605,15 +642,15 @@ export function MissionDrawer({
               playSFX('click');
               onClose();
             }}
-            className="px-4 py-2 rounded-xl bg-slate-950/90 hover:bg-slate-900 border-2 border-amber-400/70 text-amber-200 font-game text-xs font-bold flex items-center gap-2 cursor-pointer shadow-xl"
+            className="btn-game-gold btn-game-sm px-4 py-2 text-slate-950 font-game text-xs font-black flex items-center gap-2 cursor-pointer"
           >
-            <ArrowLeft className="w-4 h-4" /> RETURN TO MISSION MAP
+            <ArrowLeft className="w-4 h-4" /> KEMBALI KE PETA MISI
           </button>
 
           <div className="flex items-center gap-2">
             {audioControlBar}
             <div className="px-3.5 py-1.5 rounded-xl bg-slate-950/90 border border-emerald-400/60 text-xs font-game text-amber-300">
-              +{mission.maxXp} XP · BILIK 3D AKTIF
+              ⭐ +{mission.maxXp} XP · BILIK 3D AKTIF
             </div>
           </div>
         </div>
@@ -645,7 +682,7 @@ export function MissionDrawer({
                 playSFX('portal');
                 setPhase('activity');
               }}
-              className={`px-7 py-3.5 rounded-2xl font-game text-sm sm:text-base font-black tracking-wider uppercase flex items-center gap-2 cursor-pointer ${meta.btnClass}`}
+              className={`px-7 py-3.5 font-game text-sm sm:text-base font-black tracking-wider uppercase flex items-center gap-2 cursor-pointer ${meta.btnClass}`}
             >
               <Rocket className="w-4 h-4" /> {meta.startLabel}
             </button>
@@ -655,7 +692,7 @@ export function MissionDrawer({
                 playSFX('click');
                 setPhase('inspect3d');
               }}
-              className="px-5 py-3.5 rounded-2xl bg-slate-900 hover:bg-slate-800 border border-sky-400/60 text-sky-200 font-game text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+              className="btn-game-slate px-5 py-3.5 text-sky-200 font-game text-xs font-bold flex items-center gap-1.5 cursor-pointer"
             >
               <Eye className="w-4 h-4" /> TINJAU BILIK 3D
             </button>
@@ -669,15 +706,15 @@ export function MissionDrawer({
   // ACTIVE HOLOGRAPHIC ACTIVITY PANEL (Side panel keeping 3D Room visible on left)
   // ===========================================================================
   return (
-    <div className="fixed inset-0 top-12 z-40 flex items-center justify-end p-3 md:p-5 pointer-events-none">
+    <div className="fixed inset-0 top-12 z-40 flex items-center justify-end p-3 md:p-5 pb-24 sm:pb-24 pointer-events-none">
       <div
-        className={`pointer-events-auto w-full max-w-2xl max-h-[90vh] bg-slate-950/95 border-2 ${meta.accentBorder} rounded-3xl shadow-2xl flex flex-col overflow-hidden text-slate-100`}
+        className={`pointer-events-auto w-full max-w-2xl max-h-[calc(100vh-148px)] bg-slate-950/95 border-2 ${meta.accentBorder} rounded-3xl shadow-2xl flex flex-col overflow-hidden text-slate-100`}
       >
         {/* Holographic Header */}
         <div className="px-5 py-3.5 bg-slate-900 border-b border-slate-800 flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="game-subtitle-neon text-[11px] font-bold tracking-widest text-teal-300 uppercase">
-              {meta.subtitle} · +{mission.maxXp} XP
+              {meta.subtitle} · ⭐ +{mission.maxXp} XP
             </div>
             <h2 className={`text-lg sm:text-xl font-black truncate ${meta.titleClass}`}>
               {meta.gameTitle}
@@ -693,7 +730,7 @@ export function MissionDrawer({
                 setPhase('inspect3d');
               }}
               title="Tinjau Bilik 3D"
-              className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-sky-400/50 text-sky-300 cursor-pointer"
+              className="btn-game-slate btn-game-sm p-2 text-sky-300 cursor-pointer"
             >
               <Eye className="w-4 h-4" />
             </button>
@@ -704,9 +741,9 @@ export function MissionDrawer({
                 playSFX('click');
                 onClose();
               }}
-              className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-amber-400/60 text-amber-200 font-game text-[11px] font-bold flex items-center gap-1 cursor-pointer"
+              className="btn-game-gold btn-game-sm px-3 py-2 text-slate-950 font-game text-[11px] font-black flex items-center gap-1 cursor-pointer"
             >
-              <ArrowLeft className="w-3.5 h-3.5" /> RETURN TO MISSION MAP
+              <ArrowLeft className="w-3.5 h-3.5" /> KEMBALI KE PETA MISI
             </button>
           </div>
         </div>
@@ -731,14 +768,14 @@ export function MissionDrawer({
                         key={clue.id}
                         type="button"
                         onClick={() => onCollectClue(clue)}
-                        className={`p-2.5 rounded-xl border text-left text-xs transition-colors cursor-pointer ${
+                        className={`btn-game-sm p-2.5 text-left text-xs cursor-pointer ${
                           found
-                            ? 'bg-emerald-950/60 border-emerald-400 text-emerald-200'
-                            : 'bg-slate-950 border-slate-700 text-slate-300 hover:border-amber-400'
+                            ? 'btn-game-emerald text-slate-950 font-black'
+                            : 'btn-game-slate text-slate-200'
                         }`}
                       >
                         <div className="font-bold flex items-center gap-1.5">
-                          {found ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> : '🧪'}{' '}
+                          {found ? <CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> : '🧪'}{' '}
                           {clue.title}
                         </div>
                       </button>
@@ -772,14 +809,14 @@ export function MissionDrawer({
                       type="button"
                       disabled={isLoadingAudio}
                       onClick={playFemaleReportAudio}
-                      className="btn-game-emerald px-3.5 py-1.5 rounded-xl text-slate-950 text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-60"
+                      className="btn-game-emerald btn-game-sm px-3.5 py-1.5 text-slate-950 text-xs font-black flex items-center gap-1.5 cursor-pointer disabled:opacity-60"
                     >
                       <Volume2 className="w-3.5 h-3.5" /> {isLoadingAudio ? 'Menjana...' : 'Dengar'}
                     </button>
                     <button
                       type="button"
                       onClick={stopReportAudio}
-                      className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold cursor-pointer"
+                      className="btn-game-rose btn-game-sm px-3 py-1.5 text-white text-xs font-bold cursor-pointer"
                     >
                       Henti
                     </button>
@@ -891,7 +928,7 @@ export function MissionDrawer({
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                    4. Catatan Bukti untuk Evidence Book:
+                    4. Catatan Bukti untuk Buku Bukti:
                   </label>
                   <input
                     required
@@ -933,10 +970,10 @@ export function MissionDrawer({
                         playSFX('click');
                         setM2Scene(idx);
                       }}
-                      className={`px-3 py-1.5 rounded-lg font-game text-xs font-bold cursor-pointer ${
+                      className={`btn-game-sm px-3 py-1.5 font-game text-xs font-bold cursor-pointer ${
                         m2Scene === idx
-                          ? 'bg-amber-400 text-slate-950'
-                          : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                          ? 'btn-game-gold text-slate-950'
+                          : 'btn-game-slate text-slate-200'
                       }`}
                     >
                       Babak {idx + 1}
@@ -1249,12 +1286,21 @@ export function MissionDrawer({
                       type="button"
                       disabled={!recording}
                       onClick={handleStopRec}
-                      className="px-3.5 py-2 rounded-xl bg-rose-600 disabled:opacity-40 hover:bg-rose-500 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                      className="btn-game-rose btn-game-sm px-3.5 py-2 disabled:opacity-40 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer"
                     >
                       <Square className="w-3.5 h-3.5" /> Henti
                     </button>
                   </div>
-                  {audioUrl && <audio controls src={audioUrl} className="w-full h-9" />}
+                  {audioUrl && (
+                    <audio
+                      controls
+                      src={audioUrl}
+                      onPlay={() => setMusicState({ ducked: true })}
+                      onPause={() => setMusicState({ ducked: false })}
+                      onEnded={() => setMusicState({ ducked: false })}
+                      className="w-full h-9"
+                    />
+                  )}
                 </div>
 
                 <div>
@@ -1272,7 +1318,7 @@ export function MissionDrawer({
                   type="submit"
                   className="btn-game-gold w-full py-3 rounded-xl text-slate-950 font-game font-black text-sm tracking-wider uppercase cursor-pointer"
                 >
-                  Simpan Hujah & Buka Final Mission
+                  Simpan Hujah & Buka Misi Akhir
                 </button>
               </form>
             </>
@@ -1303,10 +1349,10 @@ export function MissionDrawer({
                       playSFX('click');
                       setM5Area(num as 1 | 2 | 3 | 4 | 5);
                     }}
-                    className={`py-2 px-1 rounded-xl font-game text-[10px] sm:text-[11px] font-bold text-center cursor-pointer transition-colors border ${
+                    className={`btn-game-sm py-2 px-1 font-game text-[10px] sm:text-[11px] font-bold text-center cursor-pointer ${
                       m5Area === num
-                        ? 'bg-amber-400 border-amber-200 text-slate-950'
-                        : 'bg-slate-900 border-slate-700 text-slate-300 hover:border-amber-400/50'
+                        ? 'btn-game-gold text-slate-950'
+                        : 'btn-game-slate text-slate-200'
                     }`}
                   >
                     {label}
@@ -1318,7 +1364,7 @@ export function MissionDrawer({
                 {m5Area === 1 && (
                   <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 space-y-3">
                     <div className="font-game text-xs font-bold text-emerald-300 uppercase">
-                      Kawasan 1: Perancangan Kempen Digital (9 Langkah PBL)
+                      Kawasan 1: Perancangan Kempen Digital (9 Langkah Projek)
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                       {PBL_STEPS.map((st, idx) => {
@@ -1356,67 +1402,214 @@ export function MissionDrawer({
                   </div>
                 )}
 
-                {m5Area === 2 && (
-                  <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 space-y-3">
-                    <div className="font-game text-xs font-bold text-sky-300 uppercase">
-                      Kawasan 2: Penyediaan Hujah Kritis (Dari Makmal Suara)
+                {m5Area === 2 && (() => {
+                  const m4Items: {
+                    key: 'pendirian' | 'bukti' | 'huraian' | 'kesimpulan';
+                    num: string;
+                    label: string;
+                    val: string;
+                    borderCls: string;
+                    labelCls: string;
+                  }[] = [
+                    {
+                      key: 'pendirian',
+                      num: '1',
+                      label: 'Pendirian',
+                      val: p.m4.argument?.pendirian || '',
+                      borderCls: 'border-emerald-500/40',
+                      labelCls: 'text-emerald-300',
+                    },
+                    {
+                      key: 'bukti',
+                      num: '2',
+                      label: 'Bukti Utama',
+                      val: p.m4.argument?.bukti || '',
+                      borderCls: 'border-cyan-500/40',
+                      labelCls: 'text-cyan-300',
+                    },
+                    {
+                      key: 'huraian',
+                      num: '3',
+                      label: 'Huraian & Cadangan',
+                      val: p.m4.argument?.huraian || '',
+                      borderCls: 'border-amber-500/40',
+                      labelCls: 'text-amber-300',
+                    },
+                    {
+                      key: 'kesimpulan',
+                      num: '4',
+                      label: 'Seruan / Kesimpulan',
+                      val: p.m4.argument?.kesimpulan || '',
+                      borderCls: 'border-violet-500/40',
+                      labelCls: 'text-violet-300',
+                    },
+                  ];
+                  const hasAnyM4 = m4Items.some((item) => item.val.trim().length > 0);
+
+                  return (
+                    <div className="p-4 rounded-2xl bg-slate-900 border border-cyan-500/40 space-y-3.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <div className="font-game text-xs font-bold text-sky-300 uppercase">
+                            Kawasan 2: Penyediaan Hujah Kritis (Dari Makmal Suara)
+                          </div>
+                          <p className="text-[11px] text-slate-400 mt-0.5">
+                            Dipaparkan secara automatik daripada hasil hujah kamu dalam Misi 4.
+                          </p>
+                        </div>
+
+                        {onUpdateMission4Argument && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              playSFX('click');
+                              setM5ArgError(null);
+                              setM5ArgSavedBanner(false);
+                              if (!m5EditingArg) {
+                                setM5ArgDraft({
+                                  pendirian: p.m4.argument?.pendirian || '',
+                                  bukti: p.m4.argument?.bukti || '',
+                                  huraian: p.m4.argument?.huraian || '',
+                                  kesimpulan: p.m4.argument?.kesimpulan || '',
+                                });
+                              }
+                              setM5EditingArg((prev) => !prev);
+                            }}
+                            className="btn-game-cyan btn-game-sm px-3 py-1.5 rounded-xl text-slate-950 font-game text-[11px] font-black cursor-pointer"
+                          >
+                            {m5EditingArg ? 'Batal Edit' : 'Edit Hujah'}
+                          </button>
+                        )}
+                      </div>
+
+                      {!hasAnyM4 && !m5EditingArg && (
+                        <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-400/40 text-xs text-amber-200">
+                          Hujah kamu daripada Misi 4 belum diisi lagi. Sila lengkapkan Misi 4: Makmal Suara atau tekan <strong>Edit Hujah</strong> untuk mengisinya.
+                        </div>
+                      )}
+
+                      {m5ArgSavedBanner && (
+                        <div className="p-2.5 rounded-xl bg-emerald-500/15 border border-emerald-400/50 text-xs text-emerald-200 font-semibold flex items-center gap-1.5">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-300 shrink-0" />
+                          <span>Kemas kini hujah berjaya disimpan untuk rekod Misi 4 &amp; Misi 5!</span>
+                        </div>
+                      )}
+
+                      {m5ArgError && (
+                        <div className="p-2.5 rounded-xl bg-rose-500/15 border border-rose-400/50 text-xs text-rose-200 font-semibold">
+                          {m5ArgError}
+                        </div>
+                      )}
+
+                      {m5EditingArg ? (
+                        <div className="space-y-2.5">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
+                            {m4Items.map((item) => (
+                              <div
+                                key={item.key}
+                                className={`p-3 rounded-xl bg-slate-950 border ${item.borderCls} space-y-1.5`}
+                              >
+                                <label className={`${item.labelCls} font-bold block`}>
+                                  {item.num}. {item.label}:
+                                </label>
+                                <textarea
+                                  rows={3}
+                                  value={m5ArgDraft[item.key]}
+                                  onChange={(e) => {
+                                    setM5ArgDraft((prev) => ({
+                                      ...prev,
+                                      [item.key]: e.target.value,
+                                    }));
+                                    if (m5ArgError) setM5ArgError(null);
+                                  }}
+                                  placeholder={`Tulis ${item.label.toLowerCase()} kamu di sini...`}
+                                  className="w-full px-2.5 py-2 rounded-lg bg-slate-900 border border-slate-700 text-white text-xs focus:outline-none focus:border-cyan-400 resize-none"
+                                />
+                              </div>
+                            ))}
+                          </div>
+                          <div className="flex justify-end">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const cleaned = {
+                                  pendirian: m5ArgDraft.pendirian.trim(),
+                                  bukti: m5ArgDraft.bukti.trim(),
+                                  huraian: m5ArgDraft.huraian.trim(),
+                                  kesimpulan: m5ArgDraft.kesimpulan.trim(),
+                                };
+                                if (
+                                  cleaned.pendirian.length < 5 ||
+                                  cleaned.bukti.length < 5 ||
+                                  cleaned.huraian.length < 5 ||
+                                  cleaned.kesimpulan.length < 5
+                                ) {
+                                  playSFX('error');
+                                  setM5ArgError(
+                                    'Sila pastikan kesemua 4 komponen hujah diisi dengan lengkap sebelum menyimpan.'
+                                  );
+                                  return;
+                                }
+                                onUpdateMission4Argument?.(cleaned);
+                                playSFX('xp');
+                                setM5EditingArg(false);
+                                setM5ArgSavedBanner(true);
+                              }}
+                              className="btn-game-gold btn-game-sm px-4 py-2 rounded-xl text-slate-950 font-game text-xs font-black cursor-pointer"
+                            >
+                              Simpan Kemas Kini Hujah
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
+                          {m4Items.map((item) => {
+                            const hasValue = item.val.trim().length > 0;
+                            return (
+                              <div
+                                key={item.key}
+                                className={`p-3 rounded-xl bg-slate-950 border ${item.borderCls}`}
+                              >
+                                <span className={`${item.labelCls} font-bold block mb-1`}>
+                                  {item.num}. {item.label}:
+                                </span>
+                                <span className={hasValue ? 'text-slate-100 leading-relaxed' : 'text-slate-500 italic'}>
+                                  {hasValue ? item.val : 'Belum diisi di Misi 4'}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => setM5Area(3)}
+                        className="btn-game-emerald px-5 py-2 rounded-xl text-slate-950 font-game text-xs font-black cursor-pointer"
+                      >
+                        Seterusnya: Produksi Audio / Video →
+                      </button>
                     </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
-                      <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
-                        <span className="text-amber-300 font-bold block mb-1">Pendirian:</span>
-                        {p.m4.argument?.pendirian || 'Belum diisi di Misi 4'}
-                      </div>
-                      <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
-                        <span className="text-amber-300 font-bold block mb-1">Bukti Utama:</span>
-                        {p.m4.argument?.bukti || 'Belum diisi di Misi 4'}
-                      </div>
-                      <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
-                        <span className="text-amber-300 font-bold block mb-1">Huraian & Cadangan:</span>
-                        {p.m4.argument?.huraian || 'Belum diisi di Misi 4'}
-                      </div>
-                      <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
-                        <span className="text-amber-300 font-bold block mb-1">Seruan / Kesimpulan:</span>
-                        {p.m4.argument?.kesimpulan || 'Belum diisi di Misi 4'}
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setM5Area(3)}
-                      className="btn-game-emerald px-5 py-2 rounded-xl text-slate-950 font-game text-xs font-black cursor-pointer"
-                    >
-                      Seterusnya: Produksi Audio / Video →
-                    </button>
-                  </div>
-                )}
+                  );
+                })()}
 
                 {m5Area === 3 && (
-                  <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 space-y-3">
+                  <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 space-y-3.5">
                     <div className="font-game text-xs font-bold text-teal-300 uppercase">
                       Kawasan 3: Studio Produksi Audio / Video Kempen
                     </div>
-                    <p className="text-xs text-slate-300">
-                      Rakam suara kempen terus di sini atau sediakan video/poster digital anda sebelum muat naik pautan di Kawasan 4.
-                    </p>
-                    <div className="flex items-center gap-2.5 flex-wrap">
-                      <button
-                        type="button"
-                        disabled={recording}
-                        onClick={handleStartRec}
-                        className="btn-game-emerald px-4 py-2 rounded-xl disabled:opacity-40 text-slate-950 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
-                      >
-                        <Mic className="w-3.5 h-3.5" /> Rakam Audio Kempen
-                      </button>
-                      <button
-                        type="button"
-                        disabled={!recording}
-                        onClick={handleStopRec}
-                        className="px-3.5 py-2 rounded-xl bg-rose-600 disabled:opacity-40 hover:bg-rose-500 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer"
-                      >
-                        <Square className="w-3.5 h-3.5" /> Henti
-                      </button>
-                      <span className="text-xs text-amber-300">{recStatus}</span>
-                    </div>
-                    {audioUrl && <audio controls src={audioUrl} className="w-full h-9" />}
+                    <Mission5RecordingPanel
+                      user={user}
+                      campaignTitle={m5Title}
+                      onSubmissionSuccess={(saved) => {
+                        if (!m5Title.trim()) {
+                          setM5Title(saved.campaignTitle || 'Kempen Selamatkan EcoWorld');
+                        }
+                        if (!m5Link.trim() || m5Link.startsWith('/api/submissions/')) {
+                          setM5Link(saved.mediaUrl || `/api/submissions/${saved.id}/media`);
+                        }
+                      }}
+                    />
                     <button
                       type="button"
                       onClick={() => setM5Area(4)}
